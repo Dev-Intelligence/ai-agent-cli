@@ -68,6 +68,10 @@ export const DEFAULTS = {
   bashTimeout: 300000, // 300秒（5分钟）
   webFetchTimeout: 30000, // 30秒
   maxTodos: 20,
+  maxRetries: 3,             // API 调用最大重试次数
+  retryInitialDelay: 1000,   // 重试初始延迟（毫秒）
+  retryMaxDelay: 30000,      // 重试最大延迟（毫秒）
+  retryBackoffMultiplier: 2, // 退避倍数
 };
 
 /**
