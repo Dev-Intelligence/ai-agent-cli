@@ -11,8 +11,11 @@ import type {
 import type { ProtocolAdapter } from '../services/ai/adapters/base.js';
 import type { PermissionManager } from './permissions.js';
 import type { HookManager } from './hooks.js';
-import { thinkingSpinner, ToolDisplay } from '../ui/index.js';
+import { thinkingSpinner, ToolDisplay, getTheme } from '../ui/index.js';
 import { getReminderManager } from './reminder.js';
+import { renderMarkdown, isMarkdownContent } from '../ui/markdown.js';
+import { withRetry } from '../utils/retry.js';
+import type { TokenTracker } from '../utils/tokenTracker.js';
 
 /**
  * 代理循环配置
@@ -24,6 +27,8 @@ export interface AgentLoopOptions {
   onToolCall?: (name: string, count: number, elapsed: number) => void; // 工具调用回调
   permissionManager?: PermissionManager;
   hookManager?: HookManager;
+  abortController?: AbortController; // 中断控制器
+  tokenTracker?: TokenTracker; // Token 追踪器
 }
 
 /**
@@ -38,7 +43,7 @@ export interface AgentLoopResult {
 /**
  * 主代理循环
  *
- * 实现思考 → 工具使用 → 响应的循环
+ * 实现思考 → 工具使用 → 响应的循环（流式输出）
  */
 export async function agentLoop(
   history: Message[],
@@ -55,6 +60,8 @@ export async function agentLoop(
     onToolCall,
     permissionManager,
     hookManager,
+    abortController,
+    tokenTracker,
   } = options;
 
   let currentHistory = [...history];
@@ -66,44 +73,119 @@ export async function agentLoop(
   while (turns < maxTurns) {
     turns++;
 
+    // 检查是否已被中断
+    if (abortController?.signal.aborted) {
+      break;
+    }
+
+    // 用于收集流式文本
+    let streamedText = '';
+
     try {
       // 1. 显示思考动画（非静默模式）
       if (!silent) {
         thinkingSpinner.start();
       }
 
-      // 2. 调用 LLM API
-      const response = await adapter.createMessage(
-        systemPrompt,
-        currentHistory,
-        adapter.convertTools(tools),
-        maxTokens
+      // 2. 流式调用 LLM API（带自动重试）
+      const streamResult = await withRetry(
+        () => {
+          // 每次重试前重置流式文本（避免重复内容）
+          streamedText = '';
+          return adapter.createStreamMessage(
+            systemPrompt,
+            currentHistory,
+            adapter.convertTools(tools),
+            maxTokens,
+            {
+              onText: (text) => {
+                if (!silent) {
+                  // 第一个文本块到达时停止 spinner
+                  if (streamedText === '') {
+                    thinkingSpinner.stop();
+                  }
+                  process.stdout.write(text);
+                }
+                streamedText += text;
+              },
+              signal: abortController?.signal,
+            }
+          );
+        },
+        { maxRetries: 3 },
+        (attempt, error, delay) => {
+          if (!silent) {
+            // 重试前清除已输出的部分文本
+            if (streamedText) {
+              const lineCount = streamedText.split('\n').length;
+              if (lineCount > 1) {
+                process.stdout.write(`\x1b[${lineCount - 1}F`);
+              } else {
+                process.stdout.write('\r');
+              }
+              process.stdout.write('\x1b[J');
+            }
+            const theme = getTheme();
+            console.log(theme.warning(`⚠ API 请求失败，${(delay / 1000).toFixed(1)}秒后重试 (${attempt}/3)... [${error.message}]`));
+            thinkingSpinner.start();
+          }
+        }
       );
 
-      // 3. 停止思考动画
+      // 3. 停止思考动画（如果还在转）
       if (!silent) {
         thinkingSpinner.stop();
       }
 
-      // 4. 提取文本块和工具调用
-      const { textBlocks, toolCalls, stopReason } = adapter.extractTextAndToolCalls(response);
+      // 3.5 记录 Token 使用
+      if (tokenTracker && streamResult.usage) {
+        tokenTracker.addRecord(streamResult.usage);
+      }
 
-      // 5. 显示文本内容（非静默模式）
-      if (!silent) {
-        for (const text of textBlocks) {
-          if (text.trim()) {
-            console.log(text);
+      // 4. 处理中断
+      if (streamResult.stopReason === 'interrupted' || abortController?.signal.aborted) {
+        if (!silent && streamedText) {
+          process.stdout.write('\n');
+          const theme = getTheme();
+          console.log(theme.textDim('\n[生成已中断]'));
+        }
+        // 将已接收文本作为部分响应添加到历史
+        if (streamedText) {
+          currentHistory.push({
+            role: 'assistant',
+            content: [{ type: 'text', text: streamedText }],
+          });
+        }
+        break;
+      }
+
+      // 5. 提取工具调用信息
+      const { toolCalls, stopReason } = streamResult;
+      const isFinalResponse = toolCalls.length === 0 || (stopReason !== 'tool_use' && stopReason !== 'tool_calls');
+
+      // 6. 流式文本输出后处理（最终响应使用 Markdown 渲染）
+      if (!silent && streamedText) {
+        if (isFinalResponse && isMarkdownContent(streamedText)) {
+          // 清除原始流式输出，替换为 Markdown 渲染版本
+          const lineCount = streamedText.split('\n').length;
+          if (lineCount > 1) {
+            process.stdout.write(`\x1b[${lineCount - 1}F`);
+          } else {
+            process.stdout.write('\r');
           }
+          process.stdout.write('\x1b[J');
+          const rendered = renderMarkdown(streamedText);
+          process.stdout.write(rendered);
+        } else {
+          process.stdout.write('\n');
         }
       }
 
-      // 6. 将助手消息添加到历史
-      const assistantMessage = adapter.formatAssistantMessage(response);
-      currentHistory.push(assistantMessage);
+      // 7. 将助手消息添加到历史
+      currentHistory.push(streamResult.assistantMessage);
 
-      // 7. 如果没有工具调用或 stop_reason 不是 tool_use，结束循环
-      // 注意：先检查 stopReason，再处理工具
-      if (toolCalls.length === 0 || (stopReason !== 'tool_use' && stopReason !== 'tool_calls')) {
+      // 8. 如果没有工具调用，结束循环
+      if (isFinalResponse) {
         break;
       }
 
@@ -265,6 +347,24 @@ export async function agentLoop(
       // API 调用失败
       if (!silent) {
         thinkingSpinner.stop();
+      }
+
+      // 检查是否是中断导致的错误
+      if (abortController?.signal.aborted) {
+        if (!silent) {
+          if (streamedText) {
+            process.stdout.write('\n');
+          }
+          const theme = getTheme();
+          console.log(theme.textDim('\n[生成已中断]'));
+        }
+        if (streamedText) {
+          currentHistory.push({
+            role: 'assistant',
+            content: [{ type: 'text', text: streamedText }],
+          });
+        }
+        break;
       }
 
       const errorMsg = error instanceof Error ? error.message : String(error);

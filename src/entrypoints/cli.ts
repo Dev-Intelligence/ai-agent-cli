@@ -11,7 +11,7 @@ import { createExecuteTool } from '../tools/dispatcher.js';
 import { getAllTools } from '../tools/definitions.js';
 import { createSystemPrompt, getAgentDescriptions } from '../core/prompts.js';
 import { agentLoop } from '../core/loop.js';
-import { Banner, Messages, setThemeByProvider, Input, getTheme } from '../ui/index.js';
+import { Banner, Messages, setThemeByProvider, Input, getTheme, PRODUCT_NAME } from '../ui/index.js';
 import { getReminderManager } from '../core/reminder.js';
 import { countTokensFromUsage, formatTokenCount, getTokenPercentage } from '../utils/tokenCounter.js';
 import { getModelContextLength, getModelDisplayName } from '../utils/modelConfig.js';
@@ -24,8 +24,12 @@ import { loadPermissionsConfig } from '../services/config/permissions.js';
 import { HookManager } from '../core/hooks.js';
 import { loadHooksConfig } from '../services/config/hooks.js';
 import { MCPRegistry } from '../services/mcp/registry.js';
+import { initTokenTracker } from '../utils/tokenTracker.js';
 import type { Message, ContentBlock } from '../core/types.js';
 import type { SlashCommandContext } from '../commands/registry.js';
+
+// 模块级中断控制器（供 SIGINT 处理器访问）
+let currentAbortController: AbortController | null = null;
 
 
 /**
@@ -100,6 +104,9 @@ async function main(): Promise<void> {
       mcpRegistry,
     });
 
+    // 11.5 初始化 Token 追踪器
+    const tokenTracker = initTokenTracker(config.model);
+
     // 12. 初始化命令注册系统
     const registry = getCommandRegistry();
     const builtinCommands = getBuiltinCommands();
@@ -121,6 +128,9 @@ async function main(): Promise<void> {
       skills: skillLoader.listSkills(),
       agentTypes: getAgentTypeNames(),
     });
+
+    // 设置终端标题
+    process.stdout.write(`\x1b]0;${PRODUCT_NAME} - ${config.model}\x07`);
 
     // 14. 创建输入管理器
     const input = new Input();
@@ -147,6 +157,7 @@ async function main(): Promise<void> {
       reminderManager,
       compressor,
       systemPrompt,
+      tokenTracker,
     };
 
     // 18. REPL 循环
@@ -165,7 +176,10 @@ async function main(): Promise<void> {
         }
 
         // 读取用户输入
-        const result = await input.promptWithResult({ prefix: '>>>' });
+        const result = await input.promptWithResult({
+          prefix: '>>>',
+          commandNames: registry.getCommandNames(),
+        });
 
         // 用户取消（ESC）
         if (result.cancelled) {
@@ -266,7 +280,9 @@ async function main(): Promise<void> {
         // 记录开始时间
         const startTime = Date.now();
 
-        // 运行代理循环（传入权限管理器和 Hook 管理器）
+        // 运行代理循环（传入权限管理器、Hook 管理器和中断控制器）
+        currentAbortController = new AbortController();
+
         const newHistory = await agentLoop(
           history,
           systemPrompt,
@@ -276,8 +292,12 @@ async function main(): Promise<void> {
           {
             permissionManager,
             hookManager,
+            abortController: currentAbortController,
+            tokenTracker,
           }
         );
+
+        currentAbortController = null;
 
         // 更新历史
         history.length = 0;
@@ -287,6 +307,9 @@ async function main(): Promise<void> {
         const elapsed = (Date.now() - startTime) / 1000;
         Messages.printAIFooter(elapsed);
       } catch (error: unknown) {
+        // 重置中断控制器
+        currentAbortController = null;
+
         // 处理单次对话错误
         const errorMsg = error instanceof Error ? error.message : String(error);
         Messages.printError(errorMsg);
@@ -316,11 +339,18 @@ process.on('unhandledRejection', (reason) => {
   process.exit(1);
 });
 
-// 处理 Ctrl+C
+// 处理 Ctrl+C（智能中断：生成中中断生成，空闲时退出程序）
 process.on('SIGINT', () => {
-  console.log('\n\n接收到中断信号');
-  Messages.printGoodbye();
-  process.exit(0);
+  if (currentAbortController) {
+    // AI 生成中：中断当前生成
+    currentAbortController.abort();
+    currentAbortController = null;
+  } else {
+    // 空闲状态：退出程序
+    console.log('\n');
+    Messages.printGoodbye();
+    process.exit(0);
+  }
 });
 
 // 启动
