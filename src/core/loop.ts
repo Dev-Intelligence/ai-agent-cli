@@ -9,6 +9,8 @@ import type {
   ExecuteToolFunc,
 } from './types.js';
 import type { ProtocolAdapter } from '../services/ai/adapters/base.js';
+import type { PermissionManager } from './permissions.js';
+import type { HookManager } from './hooks.js';
 import { thinkingSpinner, ToolDisplay } from '../ui/index.js';
 import { getReminderManager } from './reminder.js';
 
@@ -20,6 +22,8 @@ export interface AgentLoopOptions {
   maxTurns?: number;
   silent?: boolean; // 静默模式（用于子代理）
   onToolCall?: (name: string, count: number, elapsed: number) => void; // 工具调用回调
+  permissionManager?: PermissionManager;
+  hookManager?: HookManager;
 }
 
 /**
@@ -49,6 +53,8 @@ export async function agentLoop(
     maxTurns = 20,
     silent = false,
     onToolCall,
+    permissionManager,
+    hookManager,
   } = options;
 
   let currentHistory = [...history];
@@ -105,8 +111,71 @@ export async function agentLoop(
       const toolNames = toolCalls.map(tc => tc.name);
       reminderManager.recordToolCalls(toolNames);
 
+      // 9. 权限检查（串行检查，可能触发用户确认 UI）
+      if (permissionManager) {
+        for (const toolCall of toolCalls) {
+          const checkResult = permissionManager.check(toolCall.name, toolCall.input);
 
-      // 9. 并行执行所有工具
+          if (!checkResult.allowed) {
+            // 权限被拒绝
+            const toolResults: ToolResult[] = [{
+              tool_use_id: toolCall.id,
+              content: `权限被拒绝: ${checkResult.reason || '操作不被允许'}`,
+              is_error: true,
+            }];
+            const toolResultsMessage = adapter.formatToolResults(toolResults);
+            currentHistory.push(toolResultsMessage);
+            continue;
+          }
+
+          if (checkResult.needsConfirmation && !silent) {
+            // 触发 hook
+            if (hookManager?.hasHooksFor('PermissionRequest')) {
+              await hookManager.emit('PermissionRequest', {
+                toolName: toolCall.name,
+                toolInput: toolCall.input,
+              });
+            }
+
+            const confirmation = await permissionManager.promptConfirmation(
+              toolCall.name,
+              toolCall.input,
+              checkResult.reason
+            );
+
+            if (confirmation === 'deny') {
+              const toolResults: ToolResult[] = [{
+                tool_use_id: toolCall.id,
+                content: '用户拒绝了此操作',
+                is_error: true,
+              }];
+              const toolResultsMessage = adapter.formatToolResults(toolResults);
+              currentHistory.push(toolResultsMessage);
+              continue;
+            }
+          }
+        }
+      }
+
+      // 10. PreToolUse Hook
+      if (hookManager?.hasHooksFor('PreToolUse')) {
+        for (const toolCall of toolCalls) {
+          const hookResults = await hookManager.emit('PreToolUse', {
+            toolName: toolCall.name,
+            toolInput: toolCall.input,
+          });
+
+          // 检查是否被 hook 阻止
+          const blocked = hookResults.some(r => r.blocked);
+          if (blocked) {
+            if (!silent) {
+              console.log(`  ⚠️ Hook 阻止了工具 ${toolCall.name} 的执行`);
+            }
+          }
+        }
+      }
+
+      // 11. 并行执行所有工具
       const toolResults: ToolResult[] = [];
 
       // 并行执行所有工具调用
@@ -131,6 +200,15 @@ export async function agentLoop(
           // 执行工具
           const result = await executeTool(toolCall.name, toolCall.input);
 
+          // PostToolUse Hook
+          if (hookManager?.hasHooksFor('PostToolUse')) {
+            await hookManager.emit('PostToolUse', {
+              toolName: toolCall.name,
+              toolInput: toolCall.input,
+              toolOutput: result,
+            });
+          }
+
           // 显示工具结果（非静默模式）
           const isError = result.startsWith('错误:') || result.startsWith('Error:');
 
@@ -153,6 +231,15 @@ export async function agentLoop(
         } catch (error: unknown) {
           const errorMsg = error instanceof Error ? error.message : String(error);
 
+          // PostToolUseFailure Hook
+          if (hookManager?.hasHooksFor('PostToolUseFailure')) {
+            await hookManager.emit('PostToolUseFailure', {
+              toolName: toolCall.name,
+              toolInput: toolCall.input,
+              error: errorMsg,
+            });
+          }
+
           if (!silent) {
             ToolDisplay.printOutput(`工具执行失败: ${errorMsg}`, { isError: true });
           }
@@ -170,7 +257,7 @@ export async function agentLoop(
       toolResults.push(...results);
       totalToolCount += toolCalls.length;
 
-      // 10. 格式化工具结果并添加到历史
+      // 12. 格式化工具结果并添加到历史
       const toolResultsMessage = adapter.formatToolResults(toolResults);
       currentHistory.push(toolResultsMessage);
 
