@@ -39,4 +39,5 @@ export { ALL_TOOLS, BASE_TOOLS, getToolsForAgentType } from '../tools/definition
 export { createExecuteTool } from '../tools/dispatcher.js';
 
 // UI
-export { Banner, Messages, getTheme, setThemeByProvider } from '../ui/index.js';
+export { getTheme, setThemeByProvider } from '../ui/index.js';
+export type { BannerConfig } from '../ui/index.js';

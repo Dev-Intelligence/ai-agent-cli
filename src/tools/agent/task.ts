@@ -5,6 +5,7 @@
 
 import type { AgentType, Message, ToolDefinition, ExecuteToolFunc } from '../../core/types.js';
 import type { ProtocolAdapter } from '../../services/ai/adapters/base.js';
+import type { HierarchicalAbortController } from '../../core/abort.js';
 import { agentLoop } from '../../core/loop.js';
 import { getToolsForAgentType } from '../definitions.js';
 import { createSubagentSystemPrompt } from '../../core/prompts.js';
@@ -18,6 +19,7 @@ export interface TaskOptions {
   model?: string;
   runInBackground?: boolean;
   sessionId?: string; // 恢复之前的会话
+  abortController?: HierarchicalAbortController; // 子代理中断控制器
 }
 
 /**
@@ -163,7 +165,7 @@ export async function runTask(
   _executeTool: ExecuteToolFunc,
   taskOptions: TaskOptions = {}
 ): Promise<string> {
-  const { model, runInBackground = false, sessionId } = taskOptions;
+  const { model, runInBackground = false, sessionId, abortController } = taskOptions;
   const store = getSessionStore();
   const agentConfig = getAgentConfig(agentType);
 
@@ -174,7 +176,7 @@ export async function runTask(
     // 异步执行，不等待完成
     executeSubagent(
       description, prompt, agentType, workdir, adapter,
-      _systemPrompt, _tools, _executeTool, agentConfig, model
+      _systemPrompt, _tools, _executeTool, agentConfig, model, abortController
     ).then((result) => {
       store.update(session.id, {
         status: 'completed',
@@ -216,7 +218,7 @@ export async function runTask(
   // 前台执行
   return await executeSubagent(
     description, prompt, agentType, workdir, adapter,
-    _systemPrompt, _tools, _executeTool, agentConfig, model
+    _systemPrompt, _tools, _executeTool, agentConfig, model, abortController
   );
 }
 
@@ -233,7 +235,8 @@ async function executeSubagent(
   _tools: ToolDefinition[],
   _executeTool: ExecuteToolFunc,
   agentConfig: { maxTokens?: number; maxTurns?: number },
-  _model?: string
+  _model?: string,
+  abortController?: HierarchicalAbortController
 ): Promise<string> {
   const progress = new SubagentProgress(description, agentType);
 
@@ -273,6 +276,7 @@ async function executeSubagent(
           systemPrompt: _systemPrompt,
           tools: _tools,
           agentType, // 传入当前子代理类型
+          abortController, // 传入中断控制器
         });
 
         return subExecutor(toolName, input);
@@ -281,6 +285,7 @@ async function executeSubagent(
         maxTokens: agentConfig.maxTokens || 4096,
         maxTurns: agentConfig.maxTurns || 10,
         silent: true, // 静默模式，不打印工具调用
+        abortController, // 传入中断控制器
         onToolCall: (name, count, elapsed) => {
           progress.update(name, count, elapsed);
         },

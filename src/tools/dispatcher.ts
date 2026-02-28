@@ -22,6 +22,7 @@ import type { ToolDefinition, AgentType } from '../core/types.js';
 import { isMCPTool } from '../services/mcp/registry.js';
 import type { MCPRegistry } from '../services/mcp/registry.js';
 import { runListMcpResources, runReadMcpResource } from './mcp/mcpTools.js';
+import type { HierarchicalAbortController } from '../core/abort.js';
 
 /**
  * 工具执行器配置
@@ -34,13 +35,14 @@ export interface ToolExecutorConfig {
   tools?: ToolDefinition[];
   agentType?: AgentType; // 当前代理类型（用于安全检查）
   mcpRegistry?: MCPRegistry; // MCP 注册表
+  abortController?: HierarchicalAbortController; // 层级式中断控制器
 }
 
 /**
  * 创建工具执行函数
  */
 export function createExecuteTool(config: ToolExecutorConfig): ExecuteToolFunc {
-  const { workdir, skillLoader, adapter, systemPrompt, tools, agentType, mcpRegistry } = config;
+  const { workdir, skillLoader, adapter, systemPrompt, tools, agentType, mcpRegistry, abortController } = config;
 
   return async (toolName: string, input: Record<string, unknown>): Promise<string> => {
     try {
@@ -155,11 +157,14 @@ export function createExecuteTool(config: ToolExecutorConfig): ExecuteToolFunc {
         case 'TaskStop':
           return await runTaskStop(input.task_id as string);
 
-        case 'Task':
+        case 'Task': {
           // Task 工具需要额外的依赖
           if (!adapter || !systemPrompt || !tools) {
             return '错误: Task 工具需要完整的代理上下文';
           }
+
+          // 为子代理创建子级 AbortController（中断子代理不影响父级）
+          const childAbort = abortController?.createChild();
 
           return await runTask(
             input.description as string,
@@ -175,8 +180,10 @@ export function createExecuteTool(config: ToolExecutorConfig): ExecuteToolFunc {
               model: input.model as string | undefined,
               runInBackground: input.run_in_background as boolean | undefined,
               sessionId: input.resume as string | undefined,
+              abortController: childAbort,
             }
           );
+        }
 
         case 'ListMcpResources':
           if (!mcpRegistry) {

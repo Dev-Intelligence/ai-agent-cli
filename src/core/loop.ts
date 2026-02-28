@@ -1,21 +1,23 @@
 /**
- * 主代理循环 - 核心逻辑
+ * 主代理循环 - 兼容包装层
+ *
+ * 保留 agentLoop() 签名，内部调用 generator 并消费事件，
+ * 通过 UIController 分发事件（保持向后兼容）。
  */
 
 import type {
   Message,
   ToolDefinition,
-  ToolResult,
   ExecuteToolFunc,
 } from './types.js';
 import type { ProtocolAdapter } from '../services/ai/adapters/base.js';
 import type { PermissionManager } from './permissions.js';
 import type { HookManager } from './hooks.js';
-import { thinkingSpinner, ToolDisplay, getTheme } from '../ui/index.js';
-import { getReminderManager } from './reminder.js';
-import { renderMarkdown, isMarkdownContent } from '../ui/markdown.js';
-import { withRetry } from '../utils/retry.js';
+import type { UIController } from '../ui/UIController.js';
 import type { TokenTracker } from '../utils/tokenTracker.js';
+import type { HierarchicalAbortController } from './abort.js';
+import { agentLoopGenerator } from './loopGenerator.js';
+import { isMarkdownContent } from '../ui/markdown.js';
 
 /**
  * 代理循环配置
@@ -23,12 +25,13 @@ import type { TokenTracker } from '../utils/tokenTracker.js';
 export interface AgentLoopOptions {
   maxTokens?: number;
   maxTurns?: number;
-  silent?: boolean; // 静默模式（用于子代理）
-  onToolCall?: (name: string, count: number, elapsed: number) => void; // 工具调用回调
+  silent?: boolean;
+  onToolCall?: (name: string, count: number, elapsed: number) => void;
   permissionManager?: PermissionManager;
   hookManager?: HookManager;
-  abortController?: AbortController; // 中断控制器
-  tokenTracker?: TokenTracker; // Token 追踪器
+  abortController?: AbortController | HierarchicalAbortController;
+  tokenTracker?: TokenTracker;
+  uiController?: UIController;
 }
 
 /**
@@ -41,9 +44,9 @@ export interface AgentLoopResult {
 }
 
 /**
- * 主代理循环
+ * 主代理循环（兼容包装层）
  *
- * 实现思考 → 工具使用 → 响应的循环（流式输出）
+ * 内部调用 generator 并消费事件，通过 UIController 分发。
  */
 export async function agentLoop(
   history: Message[],
@@ -53,334 +56,91 @@ export async function agentLoop(
   executeTool: ExecuteToolFunc,
   options: AgentLoopOptions = {}
 ): Promise<Message[]> {
-  const {
-    maxTokens = 4096,
-    maxTurns = 20,
-    silent = false,
-    onToolCall,
-    permissionManager,
-    hookManager,
-    abortController,
-    tokenTracker,
-  } = options;
+  const { uiController, ...generatorOptions } = options;
 
-  let currentHistory = [...history];
-  let turns = 0;
-  let totalToolCount = 0;
-  const startTime = Date.now();
-  const reminderManager = getReminderManager();
+  const gen = agentLoopGenerator(
+    history,
+    systemPrompt,
+    tools,
+    adapter,
+    executeTool,
+    generatorOptions
+  );
 
-  while (turns < maxTurns) {
-    turns++;
+  let finalHistory: Message[] | undefined;
 
-    // 检查是否已被中断
-    if (abortController?.signal.aborted) {
-      break;
-    }
+  for await (const event of gen) {
+    // 如果没有 uiController，只消费事件不做 UI 操作
+    if (!uiController) continue;
 
-    // 用于收集流式文本
-    let streamedText = '';
-
-    try {
-      // 1. 显示思考动画（非静默模式）
-      if (!silent) {
-        thinkingSpinner.start();
-      }
-
-      // 2. 流式调用 LLM API（带自动重试）
-      const streamResult = await withRetry(
-        () => {
-          // 每次重试前重置流式文本（避免重复内容）
-          streamedText = '';
-          return adapter.createStreamMessage(
-            systemPrompt,
-            currentHistory,
-            adapter.convertTools(tools),
-            maxTokens,
-            {
-              onText: (text) => {
-                if (!silent) {
-                  // 第一个文本块到达时停止 spinner
-                  if (streamedText === '') {
-                    thinkingSpinner.stop();
-                  }
-                  process.stdout.write(text);
-                }
-                streamedText += text;
-              },
-              signal: abortController?.signal,
-            }
-          );
-        },
-        { maxRetries: 3 },
-        (attempt, error, delay) => {
-          if (!silent) {
-            // 重试前清除已输出的部分文本
-            if (streamedText) {
-              const lineCount = streamedText.split('\n').length;
-              if (lineCount > 1) {
-                process.stdout.write(`\x1b[${lineCount - 1}F`);
-              } else {
-                process.stdout.write('\r');
-              }
-              process.stdout.write('\x1b[J');
-            }
-            const theme = getTheme();
-            console.log(theme.warning(`⚠ API 请求失败，${(delay / 1000).toFixed(1)}秒后重试 (${attempt}/3)... [${error.message}]`));
-            thinkingSpinner.start();
-          }
-        }
-      );
-
-      // 3. 停止思考动画（如果还在转）
-      if (!silent) {
-        thinkingSpinner.stop();
-      }
-
-      // 3.5 记录 Token 使用
-      if (tokenTracker && streamResult.usage) {
-        tokenTracker.addRecord(streamResult.usage);
-      }
-
-      // 4. 处理中断
-      if (streamResult.stopReason === 'interrupted' || abortController?.signal.aborted) {
-        if (!silent && streamedText) {
-          process.stdout.write('\n');
-          const theme = getTheme();
-          console.log(theme.textDim('\n[生成已中断]'));
-        }
-        // 将已接收文本作为部分响应添加到历史
-        if (streamedText) {
-          currentHistory.push({
-            role: 'assistant',
-            content: [{ type: 'text', text: streamedText }],
-          });
-        }
+    switch (event.type) {
+      case 'thinking_start':
+        uiController.showThinking();
         break;
-      }
 
-      // 5. 提取工具调用信息
-      const { toolCalls, stopReason } = streamResult;
-      const isFinalResponse = toolCalls.length === 0 || (stopReason !== 'tool_use' && stopReason !== 'tool_calls');
+      case 'thinking_stop':
+        uiController.hideThinking();
+        break;
 
-      // 6. 流式文本输出后处理（最终响应使用 Markdown 渲染）
-      if (!silent && streamedText) {
-        if (isFinalResponse && isMarkdownContent(streamedText)) {
-          // 清除原始流式输出，替换为 Markdown 渲染版本
-          const lineCount = streamedText.split('\n').length;
-          if (lineCount > 1) {
-            process.stdout.write(`\x1b[${lineCount - 1}F`);
-          } else {
-            process.stdout.write('\r');
-          }
-          process.stdout.write('\x1b[J');
-          const rendered = renderMarkdown(streamedText);
-          process.stdout.write(rendered);
+      case 'stream_text':
+        uiController.appendStreamText(event.text);
+        break;
+
+      case 'stream_done':
+        uiController.finalizeStream(event.fullText, isMarkdownContent(event.fullText));
+        break;
+
+      case 'tool_start':
+        uiController.showToolStart(event.toolName, event.input);
+        break;
+
+      case 'tool_result':
+        if (event.isError) {
+          uiController.showToolOutput(event.result, { isError: true, maxLines: 5 });
         } else {
-          process.stdout.write('\n');
+          uiController.showToolResult(event.toolName, event.result);
         }
-      }
-
-      // 7. 将助手消息添加到历史
-      currentHistory.push(streamResult.assistantMessage);
-
-      // 8. 如果没有工具调用，结束循环
-      if (isFinalResponse) {
         break;
-      }
 
-      // 8. 记录工具调用（用于 reminder）
-      const toolNames = toolCalls.map(tc => tc.name);
-      reminderManager.recordToolCalls(toolNames);
-
-      // 9. 权限检查（串行检查，可能触发用户确认 UI）
-      if (permissionManager) {
-        for (const toolCall of toolCalls) {
-          const checkResult = permissionManager.check(toolCall.name, toolCall.input);
-
-          if (!checkResult.allowed) {
-            // 权限被拒绝
-            const toolResults: ToolResult[] = [{
-              tool_use_id: toolCall.id,
-              content: `权限被拒绝: ${checkResult.reason || '操作不被允许'}`,
-              is_error: true,
-            }];
-            const toolResultsMessage = adapter.formatToolResults(toolResults);
-            currentHistory.push(toolResultsMessage);
-            continue;
-          }
-
-          if (checkResult.needsConfirmation && !silent) {
-            // 触发 hook
-            if (hookManager?.hasHooksFor('PermissionRequest')) {
-              await hookManager.emit('PermissionRequest', {
-                toolName: toolCall.name,
-                toolInput: toolCall.input,
-              });
-            }
-
-            const confirmation = await permissionManager.promptConfirmation(
-              toolCall.name,
-              toolCall.input,
-              checkResult.reason
-            );
-
-            if (confirmation === 'deny') {
-              const toolResults: ToolResult[] = [{
-                tool_use_id: toolCall.id,
-                content: '用户拒绝了此操作',
-                is_error: true,
-              }];
-              const toolResultsMessage = adapter.formatToolResults(toolResults);
-              currentHistory.push(toolResultsMessage);
-              continue;
-            }
-          }
-        }
-      }
-
-      // 10. PreToolUse Hook
-      if (hookManager?.hasHooksFor('PreToolUse')) {
-        for (const toolCall of toolCalls) {
-          const hookResults = await hookManager.emit('PreToolUse', {
-            toolName: toolCall.name,
-            toolInput: toolCall.input,
-          });
-
-          // 检查是否被 hook 阻止
-          const blocked = hookResults.some(r => r.blocked);
-          if (blocked) {
-            if (!silent) {
-              console.log(`  ⚠️ Hook 阻止了工具 ${toolCall.name} 的执行`);
-            }
-          }
-        }
-      }
-
-      // 11. 并行执行所有工具
-      const toolResults: ToolResult[] = [];
-
-      // 并行执行所有工具调用
-      const toolPromises = toolCalls.map(async (toolCall, index) => {
-        const toolIndex = totalToolCount + index + 1;
-        const elapsed = (Date.now() - startTime) / 1000;
-
+      case 'permission_request':
+        // 兼容层：通过 uiController 请求权限并回调 resolve
         try {
-          // 显示工具开始（非静默模式）
-          if (!silent) {
-            ToolDisplay.printStart(
-              toolCall.name,
-              JSON.stringify(toolCall.input).slice(0, 50)
-            );
-          }
-
-          // 回调（用于子代理进度显示）
-          if (onToolCall) {
-            onToolCall(toolCall.name, toolIndex, elapsed);
-          }
-
-          // 执行工具
-          const result = await executeTool(toolCall.name, toolCall.input);
-
-          // PostToolUse Hook
-          if (hookManager?.hasHooksFor('PostToolUse')) {
-            await hookManager.emit('PostToolUse', {
-              toolName: toolCall.name,
-              toolInput: toolCall.input,
-              toolOutput: result,
-            });
-          }
-
-          // 显示工具结果（非静默模式）
-          const isError = result.startsWith('错误:') || result.startsWith('Error:');
-
-          if (!silent) {
-            if (isError) {
-              ToolDisplay.printOutput(result, { isError: true, maxLines: 5 });
-            } else {
-              // 显示摘要
-              const summary = result.split('\n')[0].slice(0, 80);
-              ToolDisplay.printResult(summary);
-            }
-          }
-
-          // 返回结果
-          return {
-            tool_use_id: toolCall.id,
-            content: result,
-            is_error: isError,
-          };
-        } catch (error: unknown) {
-          const errorMsg = error instanceof Error ? error.message : String(error);
-
-          // PostToolUseFailure Hook
-          if (hookManager?.hasHooksFor('PostToolUseFailure')) {
-            await hookManager.emit('PostToolUseFailure', {
-              toolName: toolCall.name,
-              toolInput: toolCall.input,
-              error: errorMsg,
-            });
-          }
-
-          if (!silent) {
-            ToolDisplay.printOutput(`工具执行失败: ${errorMsg}`, { isError: true });
-          }
-
-          return {
-            tool_use_id: toolCall.id,
-            content: `工具执行失败: ${errorMsg}`,
-            is_error: true,
-          };
-        }
-      });
-
-      // 等待所有工具执行完成
-      const results = await Promise.all(toolPromises);
-      toolResults.push(...results);
-      totalToolCount += toolCalls.length;
-
-      // 12. 格式化工具结果并添加到历史
-      const toolResultsMessage = adapter.formatToolResults(toolResults);
-      currentHistory.push(toolResultsMessage);
-
-    } catch (error: unknown) {
-      // API 调用失败
-      if (!silent) {
-        thinkingSpinner.stop();
-      }
-
-      // 检查是否是中断导致的错误
-      if (abortController?.signal.aborted) {
-        if (!silent) {
-          if (streamedText) {
-            process.stdout.write('\n');
-          }
-          const theme = getTheme();
-          console.log(theme.textDim('\n[生成已中断]'));
-        }
-        if (streamedText) {
-          currentHistory.push({
-            role: 'assistant',
-            content: [{ type: 'text', text: streamedText }],
-          });
+          const result = await uiController.requestPermission(
+            event.toolName,
+            event.params,
+            event.reason
+          );
+          event.resolve(result);
+        } catch {
+          event.resolve('deny');
         }
         break;
-      }
 
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      if (!silent) {
-        console.error(`\nAPI 调用失败: ${errorMsg}`);
-      }
+      case 'retry':
+        uiController.showRetry(event.attempt, event.maxAttempts, event.delay, event.error);
+        uiController.showThinking();
+        break;
 
-      throw error;
+      case 'error':
+        uiController.showError(event.message);
+        break;
+
+      case 'info':
+        uiController.showInfo(event.message);
+        break;
+
+      case 'warning':
+        uiController.showWarning(event.message);
+        break;
+
+      case 'turn_complete':
+        finalHistory = event.history;
+        break;
     }
   }
 
-  if (turns >= maxTurns && !silent) {
-    console.warn(`\n警告: 达到最大轮次限制 (${maxTurns})`);
-  }
-
-  return currentHistory;
+  // 返回 turn_complete 事件中的历史，或 fallback 原始历史
+  return finalHistory ?? history;
 }
 
 /**

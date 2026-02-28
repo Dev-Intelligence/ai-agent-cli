@@ -2,6 +2,14 @@
  * UI 模块统一导出
  */
 
+// UIController
+export type { UIController } from './UIController.js';
+
+// Ink UI
+export { InkUIController } from './ink/InkUIController.js';
+export { App } from './ink/App.js';
+export type { BannerConfig, CompletedItem, AppPhase, CompletedItemInput } from './ink/types.js';
+
 // 主题
 export { getTheme, setThemeByProvider, resetTheme, setTheme, getThemeName, getAvailableThemes, isAccessibilityMode } from './theme.js';
 export type { Theme, ThemeName } from './theme.js';
@@ -26,13 +34,3 @@ export {
   getMaxWidth,
   centerText,
 } from './utils.js';
-
-// 组件
-export { Logo } from './components/Logo.js';
-export { Banner } from './components/Banner.js';
-export type { BannerConfig } from './components/Banner.js';
-export { Messages } from './components/Messages.js';
-export { ToolDisplay, ToolSpinner } from './components/ToolDisplay.js';
-export { Spinner, ThinkingSpinner, thinkingSpinner } from './components/Spinner.js';
-export { Input } from './components/Input.js';
-export type { InputConfig, InputResult } from './components/Input.js';

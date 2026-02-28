@@ -177,3 +177,86 @@ export function resetTheme(): void {
 export function isAccessibilityMode(): boolean {
   return process.env.AI_AGENT_ACCESSIBILITY === 'true';
 }
+
+/**
+ * Ink 组件用的语义颜色映射
+ * 使用 hex 或 ANSI 色名，替代硬编码色值
+ */
+export interface InkColorMap {
+  primary: string;
+  secondary: string;
+  success: string;
+  error: string;
+  warning: string;
+  info: string;
+  border: string;
+  borderDim: string;
+  textDim: string;
+  cursor: string;
+  heading: string;
+}
+
+/**
+ * 内置主题的 Ink 颜色映射
+ */
+const INK_COLOR_MAPS: Record<ThemeName, InkColorMap> = {
+  default: {
+    primary: '#FFC233',
+    secondary: 'cyan',
+    success: 'green',
+    error: 'red',
+    warning: 'yellow',
+    info: 'blue',
+    border: 'gray',
+    borderDim: 'gray',
+    textDim: 'gray',
+    cursor: 'yellow',
+    heading: 'red',
+  },
+  dark: {
+    primary: '#BB86FC',
+    secondary: '#03DAC6',
+    success: '#00E676',
+    error: '#CF6679',
+    warning: '#FFB74D',
+    info: '#64B5F6',
+    border: '#424242',
+    borderDim: '#303030',
+    textDim: '#9E9E9E',
+    cursor: '#BB86FC',
+    heading: '#CF6679',
+  },
+  light: {
+    primary: '#1976D2',
+    secondary: '#00796B',
+    success: '#2E7D32',
+    error: '#C62828',
+    warning: '#F57F17',
+    info: '#0277BD',
+    border: '#BDBDBD',
+    borderDim: '#E0E0E0',
+    textDim: '#757575',
+    cursor: '#1976D2',
+    heading: '#C62828',
+  },
+  monokai: {
+    primary: '#F92672',
+    secondary: '#66D9EF',
+    success: '#A6E22E',
+    error: '#F92672',
+    warning: '#E6DB74',
+    info: '#66D9EF',
+    border: '#49483E',
+    borderDim: '#49483E',
+    textDim: '#75715E',
+    cursor: '#F92672',
+    heading: '#F92672',
+  },
+};
+
+/**
+ * 获取当前主题的 Ink 颜色映射
+ */
+export function getInkColors(): InkColorMap {
+  return INK_COLOR_MAPS[currentThemeName] || INK_COLOR_MAPS.default;
+}
