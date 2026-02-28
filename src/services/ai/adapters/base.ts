@@ -3,7 +3,28 @@
  * 定义 LLM API 的统一接口
  */
 
-import type { Message, ToolDefinition, ToolResult, ToolCall } from '../../../core/types.js';
+import type { Message, ToolDefinition, ToolResult, ToolCall, TokenUsage } from '../../../core/types.js';
+
+/**
+ * 流式回调接口
+ */
+export interface StreamCallbacks {
+  onText?: (text: string) => void;          // 文本 delta
+  onToolUse?: (toolCall: ToolCall) => void;  // 工具调用完整
+  onUsage?: (usage: TokenUsage) => void;     // Token 统计
+  signal?: AbortSignal;                       // 中断信号
+}
+
+/**
+ * 流式结果
+ */
+export interface StreamResult {
+  textBlocks: string[];
+  toolCalls: ToolCall[];
+  stopReason: string;
+  usage?: TokenUsage;
+  assistantMessage: Message;
+}
 
 /**
  * 协议适配器抽象基类
@@ -57,6 +78,17 @@ export abstract class ProtocolAdapter {
    * 格式化工具结果
    */
   abstract formatToolResults(results: ToolResult[]): Message;
+
+  /**
+   * 创建流式消息（调用 LLM API，逐步输出）
+   */
+  abstract createStreamMessage(
+    systemPrompt: string,
+    messages: Message[],
+    tools: unknown[],
+    maxTokens: number,
+    callbacks: StreamCallbacks
+  ): Promise<StreamResult>;
 
   /**
    * 获取模型名称

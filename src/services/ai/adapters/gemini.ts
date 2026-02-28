@@ -5,6 +5,7 @@
 import { GoogleGenerativeAI, GenerativeModel, Content, Part, SchemaType } from '@google/generative-ai';
 import type { Message, ToolDefinition, ToolResult, LLMResponse, ContentBlock } from '../../../core/types.js';
 import { ProtocolAdapter } from './base.js';
+import type { StreamCallbacks, StreamResult } from './base.js';
 
 export class GeminiAdapter extends ProtocolAdapter {
   private client!: GoogleGenerativeAI;
@@ -183,6 +184,164 @@ export class GeminiAdapter extends ProtocolAdapter {
     return {
       role: 'user',
       content,
+    };
+  }
+
+  /**
+   * 构建 Gemini Contents 格式（复用逻辑）
+   */
+  private buildGeminiContents(system: string, messages: Message[]): Content[] {
+    const contents: Content[] = [];
+
+    if (system) {
+      contents.push({
+        role: 'user',
+        parts: [{ text: system }],
+      });
+      contents.push({
+        role: 'model',
+        parts: [{ text: '好的，我明白了。' }],
+      });
+    }
+
+    for (const msg of messages) {
+      const role = msg.role === 'assistant' ? 'model' : 'user';
+      const parts: Part[] = [];
+
+      if (typeof msg.content === 'string') {
+        parts.push({ text: msg.content });
+      } else {
+        for (const block of msg.content) {
+          if (block.type === 'text') {
+            parts.push({ text: block.text });
+          } else if (block.type === 'tool_use') {
+            parts.push({
+              functionCall: {
+                name: block.name,
+                args: block.input,
+              },
+            });
+          } else if (block.type === 'tool_result') {
+            parts.push({
+              functionResponse: {
+                name: block.name || 'unknown',
+                response: {
+                  content: block.content,
+                },
+              },
+            });
+          }
+        }
+      }
+
+      contents.push({ role, parts });
+    }
+
+    return contents;
+  }
+
+  async createStreamMessage(
+    system: string,
+    messages: Message[],
+    tools: unknown[],
+    _maxTokens: number,
+    callbacks: StreamCallbacks
+  ): Promise<StreamResult> {
+    if (!this.generativeModel) {
+      await this.initializeClient();
+    }
+
+    const contents = this.buildGeminiContents(system, messages);
+
+    const chat = this.generativeModel.startChat({
+      history: contents.slice(0, -1),
+      tools: tools as any[],
+    });
+
+    const lastMessage = contents[contents.length - 1];
+    let fullText = '';
+    const toolCalls: Array<{ id: string; name: string; input: Record<string, unknown> }> = [];
+
+    try {
+      const result = await chat.sendMessageStream(lastMessage.parts);
+
+      for await (const chunk of result.stream) {
+        if (callbacks.signal?.aborted) break;
+
+        const chunkText = chunk.text();
+        if (chunkText) {
+          fullText += chunkText;
+          callbacks.onText?.(chunkText);
+        }
+      }
+
+      // 获取完整响应以提取函数调用
+      const response = await result.response;
+      if (response.candidates && response.candidates.length > 0) {
+        const candidate = response.candidates[0];
+        if (candidate.content && candidate.content.parts) {
+          for (const part of candidate.content.parts) {
+            if (part.functionCall) {
+              const id = `gemini_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+              const toolCall = {
+                id,
+                name: part.functionCall.name,
+                input: (part.functionCall.args || {}) as Record<string, unknown>,
+              };
+              toolCalls.push(toolCall);
+              callbacks.onToolUse?.(toolCall);
+            }
+          }
+        }
+      }
+
+      // 获取 usage（如果可用）
+      const usageMetadata = response.usageMetadata;
+      const usage = usageMetadata ? {
+        inputTokens: usageMetadata.promptTokenCount ?? 0,
+        outputTokens: usageMetadata.candidatesTokenCount ?? 0,
+      } : undefined;
+      if (usage) callbacks.onUsage?.(usage);
+    } catch (error: unknown) {
+      if (callbacks.signal?.aborted) {
+        return {
+          textBlocks: fullText ? [fullText] : [],
+          toolCalls: [],
+          stopReason: 'interrupted',
+          assistantMessage: {
+            role: 'assistant',
+            content: fullText ? [{ type: 'text' as const, text: fullText }] : [],
+          },
+        };
+      }
+      throw error;
+    }
+
+    // 如果被中断
+    if (callbacks.signal?.aborted) {
+      return {
+        textBlocks: fullText ? [fullText] : [],
+        toolCalls: [],
+        stopReason: 'interrupted',
+        assistantMessage: {
+          role: 'assistant',
+          content: fullText ? [{ type: 'text' as const, text: fullText }] : [],
+        },
+      };
+    }
+
+    // 构建 assistant message
+    const contentBlocks: ContentBlock[] = [];
+    if (fullText) contentBlocks.push({ type: 'text', text: fullText });
+    for (const tc of toolCalls) {
+      contentBlocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.input });
+    }
+
+    return {
+      textBlocks: fullText ? [fullText] : [],
+      toolCalls,
+      stopReason: toolCalls.length > 0 ? 'tool_use' : 'stop',
+      assistantMessage: { role: 'assistant', content: contentBlocks },
     };
   }
 }

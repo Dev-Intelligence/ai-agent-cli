@@ -3,8 +3,9 @@
  */
 
 import OpenAI from 'openai';
-import type { Message, ToolDefinition, ToolResult, LLMResponse, ContentBlock } from '../../../core/types.js';
+import type { Message, ToolDefinition, ToolResult, LLMResponse, ContentBlock, TokenUsage } from '../../../core/types.js';
 import { ProtocolAdapter } from './base.js';
+import type { StreamCallbacks, StreamResult } from './base.js';
 
 export class OpenAIAdapter extends ProtocolAdapter {
   private client!: OpenAI;
@@ -198,6 +199,194 @@ export class OpenAIAdapter extends ProtocolAdapter {
     return {
       role: 'user',
       content,
+    };
+  }
+
+  /**
+   * 构建 OpenAI 消息格式（复用逻辑）
+   */
+  private buildOpenAIMessages(
+    system: string,
+    messages: Message[]
+  ): OpenAI.Chat.ChatCompletionMessageParam[] {
+    const openaiMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+      { role: 'system', content: system },
+    ];
+
+    for (const msg of messages) {
+      if (msg.role === 'assistant') {
+        if (typeof msg.content === 'string') {
+          openaiMessages.push({ role: 'assistant', content: msg.content });
+        } else {
+          const textParts: string[] = [];
+          const toolCalls: OpenAI.Chat.ChatCompletionMessageToolCall[] = [];
+
+          for (const block of msg.content) {
+            if (block.type === 'text') {
+              textParts.push(block.text);
+            } else if (block.type === 'tool_use') {
+              toolCalls.push({
+                id: block.id,
+                type: 'function',
+                function: {
+                  name: block.name,
+                  arguments: JSON.stringify(block.input),
+                },
+              });
+            }
+          }
+
+          openaiMessages.push({
+            role: 'assistant',
+            content: textParts.join('\n\n') || null,
+            tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+          });
+        }
+      } else if (msg.role === 'user') {
+        if (typeof msg.content === 'string') {
+          openaiMessages.push({ role: 'user', content: msg.content });
+        } else {
+          for (const block of msg.content) {
+            if (block.type === 'tool_result') {
+              openaiMessages.push({
+                role: 'tool',
+                content: block.content,
+                tool_call_id: block.tool_use_id,
+              });
+            } else if (block.type === 'text') {
+              openaiMessages.push({ role: 'user', content: block.text });
+            }
+          }
+        }
+      }
+    }
+
+    return openaiMessages;
+  }
+
+  async createStreamMessage(
+    system: string,
+    messages: Message[],
+    tools: unknown[],
+    maxTokens: number,
+    callbacks: StreamCallbacks
+  ): Promise<StreamResult> {
+    if (!this.client) {
+      await this.initializeClient();
+    }
+
+    const openaiMessages = this.buildOpenAIMessages(system, messages);
+
+    const stream = await this.client.chat.completions.create({
+      model: this.model,
+      messages: openaiMessages,
+      tools: tools as OpenAI.Chat.ChatCompletionTool[],
+      max_tokens: maxTokens,
+      stream: true,
+      stream_options: { include_usage: true },
+    });
+
+    let textContent = '';
+    const toolCallMap = new Map<number, { id: string; name: string; arguments: string }>();
+    let finishReason = 'stop';
+    let promptTokens = 0;
+    let completionTokens = 0;
+
+    try {
+      for await (const chunk of stream) {
+        if (callbacks.signal?.aborted) break;
+
+        const choice = chunk.choices[0];
+        if (!choice) {
+          // usage-only chunk（stream_options 模式下最后一个 chunk）
+          if (chunk.usage) {
+            promptTokens = chunk.usage.prompt_tokens;
+            completionTokens = chunk.usage.completion_tokens ?? 0;
+          }
+          continue;
+        }
+
+        if (choice.finish_reason) {
+          finishReason = choice.finish_reason;
+        }
+
+        const delta = choice.delta;
+        if (delta?.content) {
+          textContent += delta.content;
+          callbacks.onText?.(delta.content);
+        }
+
+        if (delta?.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const existing = toolCallMap.get(tc.index) || { id: '', name: '', arguments: '' };
+            if (tc.id) existing.id = tc.id;
+            if (tc.function?.name) existing.name = tc.function.name;
+            if (tc.function?.arguments) existing.arguments += tc.function.arguments;
+            toolCallMap.set(tc.index, existing);
+          }
+        }
+      }
+    } catch (error: unknown) {
+      if (callbacks.signal?.aborted) {
+        return {
+          textBlocks: textContent ? [textContent] : [],
+          toolCalls: [],
+          stopReason: 'interrupted',
+          assistantMessage: {
+            role: 'assistant',
+            content: textContent ? [{ type: 'text' as const, text: textContent }] : [],
+          },
+        };
+      }
+      throw error;
+    }
+
+    // 如果被中断
+    if (callbacks.signal?.aborted) {
+      return {
+        textBlocks: textContent ? [textContent] : [],
+        toolCalls: [],
+        stopReason: 'interrupted',
+        assistantMessage: {
+          role: 'assistant',
+          content: textContent ? [{ type: 'text' as const, text: textContent }] : [],
+        },
+      };
+    }
+
+    const textBlocks = textContent ? [textContent] : [];
+    const toolCalls = Array.from(toolCallMap.values()).map((tc) => ({
+      id: tc.id,
+      name: tc.name,
+      input: JSON.parse(tc.arguments || '{}'),
+    }));
+
+    // 通知工具调用
+    for (const tc of toolCalls) {
+      callbacks.onToolUse?.(tc);
+    }
+
+    // 构建 assistant message
+    const content: ContentBlock[] = [];
+    if (textContent) {
+      content.push({ type: 'text', text: textContent });
+    }
+    for (const tc of toolCalls) {
+      content.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.input });
+    }
+
+    const usage: TokenUsage | undefined = (promptTokens || completionTokens)
+      ? { inputTokens: promptTokens, outputTokens: completionTokens }
+      : undefined;
+
+    if (usage) callbacks.onUsage?.(usage);
+
+    return {
+      textBlocks,
+      toolCalls,
+      stopReason: finishReason === 'tool_calls' ? 'tool_calls' : finishReason,
+      usage,
+      assistantMessage: { role: 'assistant', content, usage },
     };
   }
 }
