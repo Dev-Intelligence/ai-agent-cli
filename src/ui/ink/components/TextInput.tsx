@@ -1,5 +1,5 @@
 /**
- * TextInput - 终端输入组件（基于 Kode-cli）
+ * TextInput - 终端输入组件
  */
 
 import React from 'react';
@@ -106,7 +106,6 @@ export default function TextInput({
     multiline,
     cursorChar: showCursor ? ' ' : '',
     invert: chalk.inverse,
-    themeText: (text: string) => theme.text(text),
     columns,
     disableCursorMovementForUpDownKeys,
     externalOffset: cursorOffset,

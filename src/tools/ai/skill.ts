@@ -138,7 +138,7 @@ export class SkillLoader {
   }
 
   /**
-   * 生成 AI 工具提示词（对标 Kode-cli SkillTool.prompt）
+   * 生成 AI 工具提示词
    */
   async getToolPrompt(): Promise<string> {
     const skills = Array.from(this.skills.values()).filter(

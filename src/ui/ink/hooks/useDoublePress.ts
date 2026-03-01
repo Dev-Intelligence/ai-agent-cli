@@ -1,5 +1,5 @@
 /**
- * 双击/双按判定（基于 Kode-cli）
+ * 双击/双按判定
  */
 
 import { useRef } from 'react';

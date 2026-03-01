@@ -65,7 +65,7 @@ export type ToolInput =
   | TaskInput;
 
 // ============================================================
-// 技能系统类型定义 (Production-grade, 对标 Kode-cli)
+// 技能系统类型定义 (Production-grade)
 // ============================================================
 
 /**
@@ -115,7 +115,6 @@ export interface SkillMetadata {
 
 /**
  * 完整技能定义 (Production-grade)
- * 对标 Kode-cli 的 CustomCommandWithScope
  */
 export interface Skill extends SkillMetadata {
   type: 'prompt';

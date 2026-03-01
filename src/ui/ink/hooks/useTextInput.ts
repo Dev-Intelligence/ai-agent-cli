@@ -1,5 +1,5 @@
 /**
- * 文本输入核心逻辑（基于 Kode-cli）
+ * 文本输入核心逻辑
  */
 
 import { useState } from 'react';
@@ -34,7 +34,6 @@ export type UseTextInputProps = {
   multiline?: boolean;
   cursorChar: string;
   invert: (text: string) => string;
-  themeText: (text: string) => string;
   columns: number;
   disableCursorMovementForUpDownKeys?: boolean;
   externalOffset: number;
@@ -97,7 +96,7 @@ export function useTextInput({
   const handleEscape = useDoublePress(
     (show) => {
       clearPendingMessage();
-      onMessage?.(!!originalValue && show, 'Press Escape again to clear');
+      onMessage?.(!!originalValue && show, '再按一次 Esc 清空');
     },
     () => {
       if (originalValue) {
@@ -162,6 +161,7 @@ export function useTextInput({
       return cursor.insert('\n');
     }
     onSubmit?.(originalValue);
+    return undefined;
   }
 
   function upOrHistoryUp() {

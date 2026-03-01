@@ -18,18 +18,19 @@ import { UserInput } from './UserInput.js';
 import { PermissionPrompt } from './PermissionPrompt.js';
 import type { QuestionDef } from './QuestionPrompt.js';
 import { QuestionPrompt } from './QuestionPrompt.js';
+import type { SlashCommandItem } from '../completion/types.js';
 
 export interface DynamicAreaProps {
   loading: LoadingState;
   focus: FocusTarget;
   onInput: (text: string) => void;
   onExit: () => void;
-  commandNames: string[];
+  slashCommands: SlashCommandItem[];
   getTokenStats?: () => TokenStatsSnapshot;
   tokenInfo?: string | null;
 }
 
-export function DynamicArea({ loading, focus, onInput, onExit, commandNames, getTokenStats, tokenInfo }: DynamicAreaProps) {
+export function DynamicArea({ loading, focus, onInput, onExit, slashCommands, getTokenStats, tokenInfo }: DynamicAreaProps) {
   return (
     <>
       {/* Spinner — loading 非 null 时显示，与对话框/输入共存 */}
@@ -54,7 +55,7 @@ export function DynamicArea({ loading, focus, onInput, onExit, commandNames, get
       {/* 无焦点 → 输入框 */}
       {!focus && (
         <UserInput
-          commandNames={commandNames}
+          slashCommands={slashCommands}
           onSubmit={onInput}
           onExit={onExit}
           tokenInfo={tokenInfo}

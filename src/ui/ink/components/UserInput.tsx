@@ -1,17 +1,18 @@
 /**
- * UserInput - 用户输入组件（基于 Kode-cli 的 TextInput 体系）
+ * UserInput - 用户输入组件
  */
 
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Box, Text } from 'ink';
 import { getInkColors } from '../../theme.js';
 import { UI_SYMBOLS } from '../../../core/constants.js';
 import TextInput from './TextInput.js';
-import type { Key } from 'ink';
+import { useSlashCompletion } from '../hooks/useSlashCompletion.js';
+import type { SlashCommandItem } from '../completion/types.js';
 
 export interface UserInputProps {
   prefix?: string;
-  commandNames?: string[];
+  slashCommands: SlashCommandItem[];
   onSubmit: (text: string) => void;
   onExit: () => void;
   tokenInfo?: string | null;
@@ -78,7 +79,7 @@ const commandHistory = new CommandHistory();
 
 export function UserInput({
   prefix = '❯',
-  commandNames = [],
+  slashCommands,
   onSubmit,
   onExit,
   tokenInfo,
@@ -89,7 +90,22 @@ export function UserInput({
 
   const columns = Math.max(10, (process.stdout.columns || 80) - 2);
 
+  const {
+    suggestions,
+    selectedIndex,
+    isActive: completionActive,
+  } = useSlashCompletion({
+    input: value,
+    cursorOffset,
+    onInputChange: setValue,
+    setCursorOffset,
+    commands: slashCommands,
+  });
+
   const handleSubmit = useCallback((text: string) => {
+    if (completionActive && suggestions.length > 0) {
+      return;
+    }
     const trimmed = text.trim();
     if (trimmed) {
       commandHistory.add(trimmed);
@@ -97,56 +113,40 @@ export function UserInput({
     setValue('');
     setCursorOffset(0);
     onSubmit(trimmed);
-  }, [onSubmit]);
+  }, [completionActive, suggestions.length, onSubmit]);
 
   const handleHistoryUp = useCallback(() => {
+    if (completionActive) return;
     const historyText = commandHistory.up(value);
     if (historyText !== null) {
       setValue(historyText);
       setCursorOffset(historyText.length);
     }
-  }, [value]);
+  }, [completionActive, value]);
 
   const handleHistoryDown = useCallback(() => {
+    if (completionActive) return;
     const historyText = commandHistory.down();
     if (historyText !== null) {
       setValue(historyText);
       setCursorOffset(historyText.length);
     }
-  }, []);
+  }, [completionActive]);
 
-  const handleSpecialKey = useCallback((_input: string, key: Key): boolean => {
-    if (!key.tab) return false;
-
-    if (commandNames.length > 0 && value.startsWith('/')) {
-      const partial = value.slice(1).toLowerCase();
-      const matches = commandNames.filter((name) => name.startsWith(partial));
-
-      if (matches.length === 1) {
-        const completed = `/${matches[0]}`;
-        setValue(completed);
-        setCursorOffset(completed.length);
-        return true;
-      }
-
-      if (matches.length > 1) {
-        let common = matches[0]!;
-        for (const match of matches) {
-          while (!match.startsWith(common)) {
-            common = common.slice(0, -1);
-          }
-        }
-        if (common.length > partial.length) {
-          const completed = `/${common}`;
-          setValue(completed);
-          setCursorOffset(completed.length);
-          return true;
-        }
-      }
-    }
-
-    return false;
-  }, [commandNames, value]);
+  const renderedSuggestions = useMemo(() => {
+    if (!completionActive || suggestions.length === 0) return null;
+    return suggestions.map((suggestion, index) => {
+      const isSelected = index === selectedIndex;
+      return (
+        <Box key={`${suggestion.value}-${index}`}>
+          <Text color={isSelected ? colors.primary : undefined} dimColor={!isSelected}>
+            {isSelected ? '◆ ' : '  '}
+            {suggestion.displayValue}
+          </Text>
+        </Box>
+      );
+    });
+  }, [completionActive, suggestions, selectedIndex, colors.primary]);
 
   return (
     <Box flexDirection="column" marginTop={1}>
@@ -174,13 +174,21 @@ export function UserInput({
             columns={columns}
             cursorOffset={cursorOffset}
             onChangeCursorOffset={setCursorOffset}
-            onSpecialKey={handleSpecialKey}
+            disableCursorMovementForUpDownKeys={completionActive}
           />
         </Box>
       </Box>
+      {renderedSuggestions && (
+        <Box flexDirection="column" paddingLeft={2}>
+          {renderedSuggestions}
+          <Box marginTop={1}>
+            <Text dimColor>↑↓ 选择 · → 接受 · Tab 循环 · Esc 关闭</Text>
+          </Box>
+        </Box>
+      )}
       <Text dimColor>{'─'.repeat((process.stdout.columns || 80) - 1)}</Text>
       <Box justifyContent="space-between" width={(process.stdout.columns || 80) - 1}>
-        <Text dimColor>{UI_SYMBOLS.statusBar} esc to interrupt · ↑↓ history · /help</Text>
+        <Text dimColor>{UI_SYMBOLS.statusBar} Esc 取消 · ↑↓ 历史 · /help</Text>
         {tokenInfo && <Text dimColor>{tokenInfo}</Text>}
       </Box>
     </Box>

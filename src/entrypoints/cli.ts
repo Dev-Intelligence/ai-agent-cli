@@ -18,6 +18,7 @@ import { AppStore } from '../ui/ink/store.js';
 import { InkUIController } from '../ui/ink/InkUIController.js';
 import { App } from '../ui/ink/App.js';
 import { getInputHistory } from '../ui/ink/components/UserInput.js';
+import type { SlashCommandItem } from '../ui/ink/completion/types.js';
 import { getReminderManager } from '../core/reminder.js';
 import { countTokensFromUsage, formatTokenCount, getTokenPercentage } from '../utils/tokenCounter.js';
 import { getModelContextLength, getModelDisplayName } from '../utils/modelConfig.js';
@@ -33,6 +34,7 @@ import { MCPRegistry } from '../services/mcp/registry.js';
 import { initTokenTracker } from '../utils/tokenTracker.js';
 import { HierarchicalAbortController } from '../core/abort.js';
 import { patchConsole } from '../ui/ink/patchConsole.js';
+import { runSkill } from '../tools/ai/skill.js';
 import type { Message, ContentBlock } from '../core/types.js';
 import type { SlashCommandContext } from '../commands/registry.js';
 
@@ -40,6 +42,55 @@ import type { SlashCommandContext } from '../commands/registry.js';
 let rootAbort: HierarchicalAbortController | null = null;
 let unmountInk: (() => void) | null = null;
 let restoreConsole: (() => void) | null = null;
+
+/**
+ * 解析斜杠命令
+ */
+function parseSlashCommand(input: string): { commandName: string; args: string } | null {
+  const trimmed = input.trim();
+  if (!trimmed.startsWith('/')) return null;
+  const withoutSlash = trimmed.slice(1);
+  const spaceIdx = withoutSlash.indexOf(' ');
+  const commandName =
+    spaceIdx === -1 ? withoutSlash.trim() : withoutSlash.slice(0, spaceIdx).trim();
+  if (!commandName) return null;
+  const args = spaceIdx === -1 ? '' : withoutSlash.slice(spaceIdx + 1).trim();
+  return { commandName, args };
+}
+
+/**
+ * 构建斜杠命令列表（内置命令 + 自定义命令/技能）
+ */
+function buildSlashCommands(
+  builtinCommands: { name: string; aliases?: string[] }[],
+  skills: { userFacingName(): string; aliases?: string[]; isHidden?: boolean }[]
+): SlashCommandItem[] {
+  const items: SlashCommandItem[] = [];
+  const seen = new Set<string>();
+
+  for (const cmd of builtinCommands) {
+    if (seen.has(cmd.name)) continue;
+    seen.add(cmd.name);
+    items.push({
+      name: cmd.name,
+      aliases: cmd.aliases,
+      isHidden: false,
+    });
+  }
+
+  for (const skill of skills) {
+    const name = skill.userFacingName();
+    if (seen.has(name)) continue;
+    seen.add(name);
+    items.push({
+      name,
+      aliases: skill.aliases,
+      isHidden: skill.isHidden === true,
+    });
+  }
+
+  return items;
+}
 
 
 /**
@@ -123,6 +174,10 @@ async function main(): Promise<void> {
     for (const cmd of builtinCommands) {
       registry.register(cmd);
     }
+    const slashCommands = buildSlashCommands(
+      registry.listCommands(),
+      skillLoader.getAllSkills()
+    );
 
     // 14. 触发 SessionStart Hook
     if (hookManager.hasHooksFor('SessionStart')) {
@@ -201,20 +256,21 @@ async function main(): Promise<void> {
           await hookManager.emit('UserPromptSubmit', { workdir: config.workdir });
         }
 
-        // 处理斜杠命令
+        // 处理斜杠命令（内置命令 + 自定义命令/技能）
+        let effectiveInput = text;
         if (text.startsWith('/')) {
-          const spaceIdx = text.indexOf(' ');
-          const cmd = spaceIdx === -1 ? text.slice(1) : text.slice(1, spaceIdx);
+          const parsed = parseSlashCommand(text);
+          const cmdName = parsed?.commandName || '';
 
           // 特殊处理 help 命令
-          if (cmd.toLowerCase() === 'help' || cmd.toLowerCase() === 'h') {
+          if (cmdName.toLowerCase() === 'help' || cmdName.toLowerCase() === 'h') {
             inkController.showInfo(registry.getHelp());
             inkController.goToInput();
             return;
           }
 
-          // 尝试通过注册系统执行
-          const cmdResult = await registry.execute(cmd, cmdContext);
+          // 先尝试内置命令（支持参数）
+          const cmdResult = await registry.execute(text.slice(1), cmdContext);
           if (cmdResult.handled) {
             if (cmdResult.output) {
               inkController.showInfo(cmdResult.output);
@@ -223,7 +279,19 @@ async function main(): Promise<void> {
             return;
           }
 
-          // 未知命令，当作普通输入处理
+          // 再尝试自定义命令/技能
+          if (parsed) {
+            const skillResult = await runSkill(skillLoader, parsed.commandName, parsed.args);
+            if (!skillResult.success || !skillResult.prompt) {
+              const errorMsg = skillResult.error || `未知命令: /${parsed.commandName}`;
+              inkController.showError(errorMsg);
+              inkController.goToInput();
+              return;
+            }
+
+            inkController.showInfo(`/${parsed.commandName} 正在运行…`);
+            effectiveInput = skillResult.prompt;
+          }
         }
 
         // 显示用户消息
@@ -256,10 +324,10 @@ async function main(): Promise<void> {
         if (reminder) {
           userContent = [
             { type: 'text', text: reminder },
-            { type: 'text', text: text },
+            { type: 'text', text: effectiveInput },
           ];
         } else {
-          userContent = text;
+          userContent = effectiveInput;
         }
 
         // 标记第一条消息已发送
@@ -345,7 +413,7 @@ async function main(): Promise<void> {
         store: appStore,
         onInput: handleUserInput,
         onExit: handleExit,
-        commandNames: registry.getCommandNames(),
+        slashCommands,
         getTokenStats: () => {
           const stats = tokenTracker.getStats();
           return { totalTokens: stats.totalTokens, totalCost: stats.totalCost };

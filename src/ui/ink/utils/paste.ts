@@ -1,5 +1,5 @@
 /**
- * 粘贴处理工具（基于 Kode-cli）
+ * 粘贴处理工具
  */
 
 export function normalizeLineEndings(text: string): string {

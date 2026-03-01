@@ -12,16 +12,17 @@ import { CompletedItemView } from './components/CompletedItemView.js';
 import { StreamingText } from './components/StreamingText.js';
 import { DynamicArea } from './components/ActiveArea.js';
 import type { TokenStatsSnapshot } from './components/EnhancedSpinner.js';
+import type { SlashCommandItem } from './completion/types.js';
 
 export interface AppProps {
   store: AppStore;
   onInput: (text: string) => void;
   onExit: () => void;
-  commandNames: string[];
+  slashCommands: SlashCommandItem[];
   getTokenStats?: () => TokenStatsSnapshot;
 }
 
-export function App({ store, onInput, onExit, commandNames, getTokenStats }: AppProps) {
+export function App({ store, onInput, onExit, slashCommands, getTokenStats }: AppProps) {
   // 精确订阅：只在对应 slice 变化时重渲染
   const completedItems = useAppStore(store, (s) => s.completedItems);
   const loading = useAppStore(store, (s) => s.loading);
@@ -44,7 +45,7 @@ export function App({ store, onInput, onExit, commandNames, getTokenStats }: App
         focus={focus}
         onInput={onInput}
         onExit={onExit}
-        commandNames={commandNames}
+        slashCommands={slashCommands}
         getTokenStats={getTokenStats}
         tokenInfo={tokenInfo}
       />
