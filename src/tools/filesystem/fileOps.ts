@@ -9,10 +9,10 @@ import { validateFileAccess } from '../../services/system/sensitiveFiles.js';
 import { getFileReadTimestamp, recordFileRead } from '../../services/system/fileFreshness.js';
 import type { ToolExecutionResult, ToolResultContentBlock } from '../../core/types.js';
 
-const MAX_OUTPUT_SIZE = 0.25 * 1024 * 1024; // 0.25MB（对标 Kode-cli）
+const MAX_OUTPUT_SIZE = 0.25 * 1024 * 1024; // 0.25MB
 const MAX_LINE_LENGTH = 2000;
-const MAX_IMAGE_SIZE = 3.75 * 1024 * 1024; // 3.75MB（对标 Kode-cli）
-const MAX_PDF_SIZE = 10 * 1024 * 1024; // 10MB（对标 Kode-cli）
+const MAX_IMAGE_SIZE = 3.75 * 1024 * 1024; // 3.75MB
+const MAX_PDF_SIZE = 10 * 1024 * 1024; // 10MB
 const PATH_HINT = '允许目录: 工作目录、用户主目录、/tmp、/var/tmp。';
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
