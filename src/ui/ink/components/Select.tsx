@@ -1,5 +1,5 @@
 /**
- * Select - 简化版选择列表（对标 Kode-cli 交互）
+ * Select - 简化版选择列表
  */
 
 import { Box, Text, useInput } from 'ink';

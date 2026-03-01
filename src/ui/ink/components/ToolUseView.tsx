@@ -1,5 +1,5 @@
 /**
- * ToolUseView - 工具调用展示（对标 Kode-cli）
+ * ToolUseView - 工具调用展示
  */
 
 import { Box, Text } from 'ink';

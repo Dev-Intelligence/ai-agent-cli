@@ -1,5 +1,5 @@
 /**
- * PermissionDialog - 权限确认对话框组件（对标 Kode-cli）
+ * PermissionDialog - 权限确认对话框组件
  */
 
 import { useCallback } from 'react';

@@ -1,5 +1,5 @@
 /**
- * ToolResultView - 工具结果展示（对标 Kode-cli）
+ * ToolResultView - 工具结果展示
  */
 
 import path from 'node:path';

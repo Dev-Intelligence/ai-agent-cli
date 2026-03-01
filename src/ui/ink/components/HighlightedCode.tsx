@@ -1,5 +1,5 @@
 /**
- * HighlightedCode - 代码高亮组件（对标 Kode-cli）
+ * HighlightedCode - 代码高亮组件
  */
 
 import { highlight, supportsLanguage } from 'cli-highlight';

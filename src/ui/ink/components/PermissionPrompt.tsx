@@ -1,5 +1,5 @@
 /**
- * PermissionPrompt - 权限确认组件（对标 Kode-cli）
+ * PermissionPrompt - 权限确认组件
  */
 
 import { useCallback, useMemo } from 'react';

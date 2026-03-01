@@ -1,5 +1,5 @@
 /**
- * Bash 命令前缀检测（对标 Kode-cli）
+ * Bash 命令前缀检测
  */
 
 import type { ProtocolAdapter } from '../services/ai/adapters/base.js';
