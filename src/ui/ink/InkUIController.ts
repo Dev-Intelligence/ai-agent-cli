@@ -10,6 +10,7 @@ import type { AgentEvent } from '../../core/agentEvent.js';
 import type { AppStore } from './store.js';
 import { isMarkdownContent } from '../markdown.js';
 import type { TokenTracker } from '../../utils/tokenTracker.js';
+import { setRequestStatus } from './requestStatus.js';
 
 /**
  * 基于 Ink + AppStore 的 UI 控制器实现
@@ -18,6 +19,7 @@ export class InkUIController implements UIController {
   private store: AppStore;
   private tokenTracker?: TokenTracker;
   private toolInputById = new Map<string, Record<string, unknown>>();
+  private hasMarkedStreaming = false;
 
   // 流式文本批量 flush 相关
   private _streamFlushTimer: ReturnType<typeof setTimeout> | null = null;
@@ -111,6 +113,8 @@ export class InkUIController implements UIController {
   }
 
   showThinking(): void {
+    this.hasMarkedStreaming = false;
+    setRequestStatus({ kind: 'thinking' });
     // 清除上一轮可能残留的流式状态
     if (this._currentStreamText || this._streamFlushTimer) {
       if (this._streamFlushTimer) {
@@ -134,6 +138,10 @@ export class InkUIController implements UIController {
 
   appendStreamText(text: string): void {
     this._currentStreamText += text;
+    if (!this.hasMarkedStreaming) {
+      setRequestStatus({ kind: 'streaming' });
+      this.hasMarkedStreaming = true;
+    }
 
     // 16ms 批量 flush 避免频繁重渲染
     if (!this._streamFlushTimer) {
@@ -202,6 +210,7 @@ export class InkUIController implements UIController {
 
   showToolStart(toolName: string, toolUseId: string, input?: Record<string, unknown>): void {
     const detail = input ? this._summarizeToolInput(toolName, input) : undefined;
+    setRequestStatus({ kind: 'tool', detail: toolName });
     if (input && !this.toolInputById.has(toolUseId)) {
       this.toolInputById.set(toolUseId, input);
     }
@@ -370,6 +379,7 @@ export class InkUIController implements UIController {
   }
 
   goToInput(): void {
+    setRequestStatus({ kind: 'idle' });
     this.store.resetToInput();
   }
 

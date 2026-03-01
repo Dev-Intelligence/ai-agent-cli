@@ -8,6 +8,7 @@ import { getInkColors } from '../../theme.js';
 import { UI_SYMBOLS } from '../../../core/constants.js';
 import TextInput from './TextInput.js';
 import { useSlashCompletion } from '../hooks/useSlashCompletion.js';
+import { useStatusLine } from '../hooks/useStatusLine.js';
 import type { SlashCommandItem } from '../completion/types.js';
 
 export interface UserInputProps {
@@ -89,6 +90,7 @@ export function UserInput({
   const colors = getInkColors();
 
   const columns = Math.max(10, (process.stdout.columns || 80) - 2);
+  const statusLine = useStatusLine();
 
   const {
     suggestions,
@@ -148,6 +150,13 @@ export function UserInput({
     });
   }, [completionActive, suggestions, selectedIndex, colors.primary]);
 
+  const rightStatusText = useMemo(() => {
+    if (statusLine && tokenInfo) {
+      return `${statusLine} · ${tokenInfo}`;
+    }
+    return statusLine || tokenInfo || null;
+  }, [statusLine, tokenInfo]);
+
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text dimColor>{'─'.repeat((process.stdout.columns || 80) - 1)}</Text>
@@ -189,7 +198,7 @@ export function UserInput({
       <Text dimColor>{'─'.repeat((process.stdout.columns || 80) - 1)}</Text>
       <Box justifyContent="space-between" width={(process.stdout.columns || 80) - 1}>
         <Text dimColor>{UI_SYMBOLS.statusBar} Esc 取消 · ↑↓ 历史 · /help</Text>
-        {tokenInfo && <Text dimColor>{tokenInfo}</Text>}
+        {rightStatusText && <Text dimColor wrap="truncate-end">{rightStatusText}</Text>}
       </Box>
     </Box>
   );

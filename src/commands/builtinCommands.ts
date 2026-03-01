@@ -17,6 +17,7 @@ import { execSync } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { setTheme, getThemeName, getAvailableThemes, setThemeByProvider } from '../ui/index.js';
+import { getStatusLineCommand, setStatusLineCommand } from '../services/ui/statusline.js';
 
 /**
  * /help 命令
@@ -506,6 +507,32 @@ export const themeCommand: SlashCommand = {
 };
 
 /**
+ * /statusline 命令 - 设置状态栏命令
+ */
+export const statuslineCommand: SlashCommand = {
+  name: 'statusline',
+  description: '设置或查看状态栏命令',
+  async execute(args) {
+    const trimmed = args.trim();
+    if (!trimmed) {
+      const current = getStatusLineCommand();
+      if (!current) {
+        return '当前未设置 statusline。\n用法: /statusline <命令> 或 /statusline off';
+      }
+      return `当前 statusline: ${current}\n用法: /statusline <命令> 或 /statusline off`;
+    }
+
+    if (['off', 'clear', 'disable'].includes(trimmed.toLowerCase())) {
+      const ok = setStatusLineCommand(null);
+      return ok ? '已清除 statusline。' : '错误: 未找到用户配置文件。';
+    }
+
+    const ok = setStatusLineCommand(trimmed);
+    return ok ? `已设置 statusline: ${trimmed}` : '错误: 未找到用户配置文件。';
+  },
+};
+
+/**
  * 获取所有内置命令
  */
 export function getBuiltinCommands(): SlashCommand[] {
@@ -528,5 +555,6 @@ export function getBuiltinCommands(): SlashCommand[] {
     initCommand,
     debugCommand,
     themeCommand,
+    statuslineCommand,
   ];
 }

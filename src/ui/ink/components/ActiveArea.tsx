@@ -11,8 +11,8 @@
  * 子元素直接暴露给父级 Box(column)，由 App.tsx 的根 Box 负责布局。
  */
 
-import type { LoadingState, FocusTarget, ActiveToolUse } from '../types.js';
-import { EnhancedSpinner } from './EnhancedSpinner.js';
+import type { FocusTarget, ActiveToolUse } from '../types.js';
+import { RequestStatusIndicator } from './RequestStatusIndicator.js';
 import type { TokenStatsSnapshot } from './EnhancedSpinner.js';
 import { UserInput } from './UserInput.js';
 import { PermissionPrompt } from './PermissionPrompt.js';
@@ -22,7 +22,6 @@ import type { SlashCommandItem } from '../completion/types.js';
 import { ToolUseView } from './ToolUseView.js';
 
 export interface DynamicAreaProps {
-  loading: LoadingState;
   focus: FocusTarget;
   onInput: (text: string) => void;
   onExit: () => void;
@@ -30,10 +29,10 @@ export interface DynamicAreaProps {
   getTokenStats?: () => TokenStatsSnapshot;
   tokenInfo?: string | null;
   activeToolUses: ActiveToolUse[];
+  isLoading: boolean;
 }
 
 export function DynamicArea({
-  loading,
   focus,
   onInput,
   onExit,
@@ -41,11 +40,14 @@ export function DynamicArea({
   getTokenStats,
   tokenInfo,
   activeToolUses,
+  isLoading,
 }: DynamicAreaProps) {
   return (
     <>
-      {/* Spinner — loading 非 null 时显示，与对话框/输入共存 */}
-      {loading && <EnhancedSpinner loading={loading} getTokenStats={getTokenStats} />}
+      {/* RequestStatusIndicator — 对标 Kode-cli */}
+      {isLoading && !focus && (
+        <RequestStatusIndicator getTokenStats={getTokenStats} />
+      )}
 
       {/* 活跃工具调用（非 Static，可动画） */}
       {activeToolUses.length > 0 && (

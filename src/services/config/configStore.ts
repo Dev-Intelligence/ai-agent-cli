@@ -15,6 +15,7 @@ export interface UserConfig {
     apiKey: string;
     model: string;
     baseUrl?: string;
+    statusLine?: string | { command?: string };
 }
 
 /**

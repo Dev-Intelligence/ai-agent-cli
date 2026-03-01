@@ -26,10 +26,11 @@ export function App({ store, onInput, onExit, slashCommands, getTokenStats }: Ap
   // 精确订阅：只在对应 slice 变化时重渲染
   const completedItems = useAppStore(store, (s) => s.completedItems);
   const activeToolUses = useAppStore(store, (s) => s.activeToolUses);
-  const loading = useAppStore(store, (s) => s.loading);
   const streaming = useAppStore(store, (s) => s.streaming);
+  const loading = useAppStore(store, (s) => s.loading);
   const focus = useAppStore(store, (s) => s.focus);
   const tokenInfo = useAppStore(store, (s) => s.tokenInfo);
+  const isLoading = Boolean(loading || streaming || activeToolUses.length > 0);
 
   return (
     <Box flexDirection="column">
@@ -42,7 +43,6 @@ export function App({ store, onInput, onExit, slashCommands, getTokenStats }: Ap
 
       {/* 动态区域 — 堆叠式 */}
       <DynamicArea
-        loading={loading}
         focus={focus}
         onInput={onInput}
         onExit={onExit}
@@ -50,6 +50,7 @@ export function App({ store, onInput, onExit, slashCommands, getTokenStats }: Ap
         getTokenStats={getTokenStats}
         tokenInfo={tokenInfo}
         activeToolUses={activeToolUses}
+        isLoading={isLoading}
       />
     </Box>
   );
