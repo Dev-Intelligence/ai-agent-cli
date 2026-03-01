@@ -18,7 +18,6 @@ import { UserInput } from './UserInput.js';
 import { PermissionPrompt } from './PermissionPrompt.js';
 import type { QuestionDef } from './QuestionPrompt.js';
 import { QuestionPrompt } from './QuestionPrompt.js';
-import type { KeybindingRegistry } from '../../keybindings.js';
 
 export interface DynamicAreaProps {
   loading: LoadingState;
@@ -26,12 +25,11 @@ export interface DynamicAreaProps {
   onInput: (text: string) => void;
   onExit: () => void;
   commandNames: string[];
-  keybindingRegistry?: KeybindingRegistry;
   getTokenStats?: () => TokenStatsSnapshot;
   tokenInfo?: string | null;
 }
 
-export function DynamicArea({ loading, focus, onInput, onExit, commandNames, keybindingRegistry, getTokenStats, tokenInfo }: DynamicAreaProps) {
+export function DynamicArea({ loading, focus, onInput, onExit, commandNames, getTokenStats, tokenInfo }: DynamicAreaProps) {
   return (
     <>
       {/* Spinner — loading 非 null 时显示，与对话框/输入共存 */}
@@ -58,9 +56,7 @@ export function DynamicArea({ loading, focus, onInput, onExit, commandNames, key
         <UserInput
           commandNames={commandNames}
           onSubmit={onInput}
-          onCancel={() => {}}
           onExit={onExit}
-          keybindingRegistry={keybindingRegistry}
           tokenInfo={tokenInfo}
         />
       )}

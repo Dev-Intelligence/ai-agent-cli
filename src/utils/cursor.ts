@@ -1,323 +1,415 @@
 /**
- * Cursor - 文本编辑光标类
+ * Cursor - 终端输入光标与显示宽度计算
  *
- * 提供不可变的文本编辑操作
- * 所有操作返回新的 Cursor 对象，保持原对象不变
+ * 基于 Kode-cli 的实现：使用 wrap-ansi 对文本进行换行测量，
+ * 确保中文/全角字符在终端中的列宽计算正确。
  */
 
-/**
- * 位置信息
- */
-export interface Position {
-    line: number;    // 行号 (0-indexed)
-    column: number;  // 列号 (0-indexed)
+import wrapAnsi from 'wrap-ansi';
+
+type WrappedText = string[];
+
+type Position = {
+  line: number;
+  column: number;
+};
+
+export class Cursor {
+  readonly offset: number;
+
+  constructor(
+    readonly measuredText: MeasuredText,
+    offset: number = 0,
+    readonly selection: number = 0
+  ) {
+    this.offset = Math.max(0, Math.min(this.measuredText.text.length, offset));
+  }
+
+  static fromText(
+    text: string,
+    columns: number,
+    offset: number = 0,
+    selection: number = 0
+  ): Cursor {
+    return new Cursor(new MeasuredText(text, columns - 1), offset, selection);
+  }
+
+  render(cursorChar: string, mask: string, invert: (text: string) => string): string {
+    const { line, column } = this.getPosition();
+    return this.measuredText
+      .getWrappedText()
+      .map((text, currentLine, allLines) => {
+        let displayText = text;
+        if (mask && currentLine === allLines.length - 1) {
+          const lastSixStart = Math.max(0, text.length - 6);
+          displayText = mask.repeat(lastSixStart) + text.slice(lastSixStart);
+        }
+        if (line !== currentLine) return displayText.trimEnd();
+
+        return (
+          displayText.slice(0, column) +
+          invert(displayText[column] || cursorChar) +
+          displayText.trimEnd().slice(column + 1)
+        );
+      })
+      .join('\n');
+  }
+
+  left(): Cursor {
+    return new Cursor(this.measuredText, this.offset - 1);
+  }
+
+  right(): Cursor {
+    return new Cursor(this.measuredText, this.offset + 1);
+  }
+
+  up(): Cursor {
+    const { line, column } = this.getPosition();
+    if (line === 0) {
+      return new Cursor(this.measuredText, 0, 0);
+    }
+
+    const newOffset = this.getOffset({ line: line - 1, column });
+    return new Cursor(this.measuredText, newOffset, 0);
+  }
+
+  down(): Cursor {
+    const { line, column } = this.getPosition();
+    if (line >= this.measuredText.lineCount - 1) {
+      return new Cursor(this.measuredText, this.text.length, 0);
+    }
+
+    const newOffset = this.getOffset({ line: line + 1, column });
+    return new Cursor(this.measuredText, newOffset, 0);
+  }
+
+  startOfLine(): Cursor {
+    const { line } = this.getPosition();
+    return new Cursor(
+      this.measuredText,
+      this.getOffset({
+        line,
+        column: 0,
+      }),
+      0
+    );
+  }
+
+  endOfLine(): Cursor {
+    const { line } = this.getPosition();
+    const column = this.measuredText.getLineLength(line);
+    const offset = this.getOffset({ line, column });
+    return new Cursor(this.measuredText, offset, 0);
+  }
+
+  nextWord(): Cursor {
+    let nextCursor: Cursor = this;
+    while (nextCursor.isOverWordChar() && !nextCursor.isAtEnd()) {
+      nextCursor = nextCursor.right();
+    }
+    while (!nextCursor.isOverWordChar() && !nextCursor.isAtEnd()) {
+      nextCursor = nextCursor.right();
+    }
+    return nextCursor;
+  }
+
+  prevWord(): Cursor {
+    let cursor: Cursor = this;
+
+    if (!cursor.left().isOverWordChar()) {
+      cursor = cursor.left();
+    }
+
+    while (!cursor.isOverWordChar() && !cursor.isAtStart()) {
+      cursor = cursor.left();
+    }
+
+    if (cursor.isOverWordChar()) {
+      while (cursor.left().isOverWordChar() && !cursor.isAtStart()) {
+        cursor = cursor.left();
+      }
+    }
+
+    return cursor;
+  }
+
+  private modifyText(end: Cursor, insertString: string = ''): Cursor {
+    const startOffset = this.offset;
+    const endOffset = end.offset;
+
+    const newText =
+      this.text.slice(0, startOffset) +
+      insertString +
+      this.text.slice(endOffset);
+
+    return Cursor.fromText(
+      newText,
+      this.columns,
+      startOffset + insertString.length
+    );
+  }
+
+  insert(insertString: string): Cursor {
+    return this.modifyText(this, insertString);
+  }
+
+  del(): Cursor {
+    if (this.isAtEnd()) {
+      return this;
+    }
+    return this.modifyText(this.right());
+  }
+
+  backspace(): Cursor {
+    if (this.isAtStart()) {
+      return this;
+    }
+
+    const currentOffset = this.offset;
+    const leftCursor = this.left();
+    const leftOffset = leftCursor.offset;
+
+    const newText =
+      this.text.slice(0, leftOffset) + this.text.slice(currentOffset);
+
+    return Cursor.fromText(newText, this.columns, leftOffset);
+  }
+
+  deleteToLineStart(): Cursor {
+    return this.startOfLine().modifyText(this);
+  }
+
+  deleteToLineEnd(): Cursor {
+    if (this.text[this.offset] === '\n') {
+      return this.modifyText(this.right());
+    }
+
+    return this.modifyText(this.endOfLine());
+  }
+
+  deleteWordBefore(): Cursor {
+    if (this.isAtStart()) {
+      return this;
+    }
+    return this.prevWord().modifyText(this);
+  }
+
+  deleteWordAfter(): Cursor {
+    if (this.isAtEnd()) {
+      return this;
+    }
+
+    return this.modifyText(this.nextWord());
+  }
+
+  private isOverWordChar(): boolean {
+    const currentChar = this.text[this.offset] ?? '';
+    return /\w/.test(currentChar);
+  }
+
+  equals(other: Cursor): boolean {
+    return this.offset === other.offset && this.measuredText === other.measuredText;
+  }
+
+  private isAtStart(): boolean {
+    return this.offset === 0;
+  }
+
+  private isAtEnd(): boolean {
+    return this.offset === this.text.length;
+  }
+
+  get text(): string {
+    return this.measuredText.text;
+  }
+
+  private get columns(): number {
+    return this.measuredText.columns + 1;
+  }
+
+  private getPosition(): Position {
+    return this.measuredText.getPositionFromOffset(this.offset);
+  }
+
+  private getOffset(position: Position): number {
+    return this.measuredText.getOffsetFromPosition(position);
+  }
 }
 
-/**
- * Cursor 类 - 管理文本和光标位置
- */
-export class Cursor {
-    readonly text: string;
-    readonly offset: number;  // 光标在字符串中的位置 (0-indexed)
+class WrappedLine {
+  constructor(
+    public readonly text: string,
+    public readonly startOffset: number,
+    public readonly isPrecededByNewline: boolean,
+    public readonly endsWithNewline: boolean = false
+  ) {}
 
-    constructor(text: string, offset: number = 0) {
-        this.text = text;
-        // 确保 offset 在有效范围内
-        this.offset = Math.max(0, Math.min(text.length, offset));
-    }
+  equals(other: WrappedLine): boolean {
+    return this.text === other.text && this.startOffset === other.startOffset;
+  }
 
-    /**
-     * 获取光标所在的行和列
-     */
-    getPosition(): Position {
-        const lines = this.text.split('\n');
-        let charCount = 0;
+  get length(): number {
+    return this.text.length + (this.endsWithNewline ? 1 : 0);
+  }
+}
 
-        for (let line = 0; line < lines.length; line++) {
-            const lineLength = lines[line].length;
+export class MeasuredText {
+  private wrappedLines: WrappedLine[];
 
-            if (charCount + lineLength >= this.offset) {
-                // 光标在当前行
-                return {
-                    line,
-                    column: this.offset - charCount,
-                };
-            }
+  constructor(
+    readonly text: string,
+    readonly columns: number
+  ) {
+    this.wrappedLines = this.measureWrappedText();
+  }
 
-            // +1 for the '\n' character
-            charCount += lineLength + 1;
+  private measureWrappedText(): WrappedLine[] {
+    const wrappedText = wrapAnsi(this.text, this.columns, {
+      hard: true,
+      trim: false,
+    });
+
+    const wrappedLines: WrappedLine[] = [];
+    let searchOffset = 0;
+    let lastNewLinePos = -1;
+
+    const lines = wrappedText.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const text = lines[i]!;
+      const isPrecededByNewline = (startOffset: number) =>
+        i === 0 || (startOffset > 0 && this.text[startOffset - 1] === '\n');
+
+      if (text.length === 0) {
+        lastNewLinePos = this.text.indexOf('\n', lastNewLinePos + 1);
+
+        if (lastNewLinePos !== -1) {
+          const startOffset = lastNewLinePos;
+          const endsWithNewline = true;
+
+          wrappedLines.push(
+            new WrappedLine(
+              text,
+              startOffset,
+              isPrecededByNewline(startOffset),
+              endsWithNewline
+            )
+          );
+        } else {
+          const startOffset = this.text.length;
+          wrappedLines.push(
+            new WrappedLine(
+              text,
+              startOffset,
+              isPrecededByNewline(startOffset),
+              false
+            )
+          );
+        }
+      } else {
+        const startOffset = this.text.indexOf(text, searchOffset);
+        if (startOffset === -1) {
+          throw new Error('CURSOR_WRAP_MISMATCH: 无法在原始文本中定位换行片段');
         }
 
-        // 如果到这里，光标在最后
+        searchOffset = startOffset + text.length;
+
+        const potentialNewlinePos = startOffset + text.length;
+        const endsWithNewline =
+          potentialNewlinePos < this.text.length &&
+          this.text[potentialNewlinePos] === '\n';
+
+        if (endsWithNewline) {
+          lastNewLinePos = potentialNewlinePos;
+        }
+
+        wrappedLines.push(
+          new WrappedLine(
+            text,
+            startOffset,
+            isPrecededByNewline(startOffset),
+            endsWithNewline
+          )
+        );
+      }
+    }
+
+    return wrappedLines;
+  }
+
+  getWrappedText(): WrappedText {
+    return this.wrappedLines.map((line) =>
+      line.isPrecededByNewline ? line.text : line.text.trimStart()
+    );
+  }
+
+  private getLine(line: number): WrappedLine {
+    return this.wrappedLines[
+      Math.max(0, Math.min(line, this.wrappedLines.length - 1))
+    ]!;
+  }
+
+  getOffsetFromPosition(position: Position): number {
+    const wrappedLine = this.getLine(position.line);
+    const startOffsetPlusColumn = wrappedLine.startOffset + position.column;
+
+    if (wrappedLine.text.length === 0 && wrappedLine.endsWithNewline) {
+      return wrappedLine.startOffset;
+    }
+
+    const lineEnd = wrappedLine.startOffset + wrappedLine.text.length;
+    const maxOffset = wrappedLine.endsWithNewline ? lineEnd + 1 : lineEnd;
+
+    return Math.min(startOffsetPlusColumn, maxOffset);
+  }
+
+  getLineLength(line: number): number {
+    const currentLine = this.getLine(line);
+    const nextLine = this.getLine(line + 1);
+    if (nextLine.equals(currentLine)) {
+      return this.text.length - currentLine.startOffset;
+    }
+
+    return nextLine.startOffset - currentLine.startOffset - 1;
+  }
+
+  getPositionFromOffset(offset: number): Position {
+    const lines = this.wrappedLines;
+    for (let line = 0; line < lines.length; line++) {
+      const currentLine = lines[line]!;
+      const nextLine = lines[line + 1];
+      if (
+        offset >= currentLine.startOffset &&
+        (!nextLine || offset < nextLine.startOffset)
+      ) {
+        const leadingWhitespace = currentLine.isPrecededByNewline
+          ? 0
+          : currentLine.text.length - currentLine.text.trimStart().length;
+        const column = Math.max(
+          0,
+          Math.min(
+            offset - currentLine.startOffset - leadingWhitespace,
+            currentLine.text.length
+          )
+        );
         return {
-            line: Math.max(0, lines.length - 1),
-            column: lines[lines.length - 1]?.length || 0,
+          line,
+          column,
         };
+      }
     }
 
-    /**
-     * 从位置获取 offset
-     */
-    private getOffsetFromPosition(position: Position): number {
-        const lines = this.text.split('\n');
-        let offset = 0;
+    const line = lines.length - 1;
+    return {
+      line,
+      column: this.wrappedLines[line]!.text.length,
+    };
+  }
 
-        for (let i = 0; i < position.line && i < lines.length; i++) {
-            offset += lines[i].length + 1; // +1 for '\n'
-        }
+  get lineCount(): number {
+    return this.wrappedLines.length;
+  }
 
-        const currentLine = lines[position.line] || '';
-        offset += Math.min(position.column, currentLine.length);
-
-        return Math.min(offset, this.text.length);
-    }
-
-    /**
-     * 获取所有行
-     */
-    getLines(): string[] {
-        return this.text.split('\n');
-    }
-
-    /**
-     * 插入文本
-     */
-    insert(str: string): Cursor {
-        const newText =
-            this.text.slice(0, this.offset) +
-            str +
-            this.text.slice(this.offset);
-
-        return new Cursor(newText, this.offset + str.length);
-    }
-
-    /**
-     * 删除光标位置的字符 (Delete键)
-     */
-    delete(): Cursor {
-        if (this.offset >= this.text.length) {
-            return this;
-        }
-
-        const newText =
-            this.text.slice(0, this.offset) +
-            this.text.slice(this.offset + 1);
-
-        return new Cursor(newText, this.offset);
-    }
-
-    /**
-     * 删除光标前的字符 (Backspace键)
-     */
-    backspace(): Cursor {
-        if (this.offset === 0) {
-            return this;
-        }
-
-        const newText =
-            this.text.slice(0, this.offset - 1) +
-            this.text.slice(this.offset);
-
-        return new Cursor(newText, this.offset - 1);
-    }
-
-    /**
-     * 光标左移
-     */
-    left(): Cursor {
-        return new Cursor(this.text, this.offset - 1);
-    }
-
-    /**
-     * 光标右移
-     */
-    right(): Cursor {
-        return new Cursor(this.text, this.offset + 1);
-    }
-
-    /**
-     * 光标上移
-     */
-    up(): Cursor {
-        const pos = this.getPosition();
-
-        if (pos.line === 0) {
-            // 已经在第一行，移到行首
-            return new Cursor(this.text, 0);
-        }
-
-        const newPos: Position = {
-            line: pos.line - 1,
-            column: pos.column,
-        };
-
-        return new Cursor(this.text, this.getOffsetFromPosition(newPos));
-    }
-
-    /**
-     * 光标下移
-     */
-    down(): Cursor {
-        const pos = this.getPosition();
-        const lines = this.getLines();
-
-        if (pos.line >= lines.length - 1) {
-            // 已经在最后一行，移到行尾
-            return new Cursor(this.text, this.text.length);
-        }
-
-        const newPos: Position = {
-            line: pos.line + 1,
-            column: pos.column,
-        };
-
-        return new Cursor(this.text, this.getOffsetFromPosition(newPos));
-    }
-
-    /**
-     * 移到行首
-     */
-    startOfLine(): Cursor {
-        const pos = this.getPosition();
-        const newPos: Position = { line: pos.line, column: 0 };
-        return new Cursor(this.text, this.getOffsetFromPosition(newPos));
-    }
-
-    /**
-     * 移到行尾
-     */
-    endOfLine(): Cursor {
-        const pos = this.getPosition();
-        const lines = this.getLines();
-        const lineLength = lines[pos.line]?.length || 0;
-        const newPos: Position = { line: pos.line, column: lineLength };
-        return new Cursor(this.text, this.getOffsetFromPosition(newPos));
-    }
-
-    /**
-     * 删除到行首
-     */
-    deleteToLineStart(): Cursor {
-        const lineStart = this.startOfLine();
-        const newText =
-            this.text.slice(0, lineStart.offset) +
-            this.text.slice(this.offset);
-
-        return new Cursor(newText, lineStart.offset);
-    }
-
-    /**
-     * 删除到行尾
-     */
-    deleteToLineEnd(): Cursor {
-        const lineEnd = this.endOfLine();
-        const newText =
-            this.text.slice(0, this.offset) +
-            this.text.slice(lineEnd.offset);
-
-        return new Cursor(newText, this.offset);
-    }
-
-    /**
-     * 移到下一个单词
-     */
-    nextWord(): Cursor {
-        let pos = this.offset;
-
-        // 跳过当前单词字符
-        while (pos < this.text.length && this.isWordChar(this.text[pos])) {
-            pos++;
-        }
-
-        // 跳过空白字符
-        while (pos < this.text.length && !this.isWordChar(this.text[pos])) {
-            pos++;
-        }
-
-        return new Cursor(this.text, pos);
-    }
-
-    /**
-     * 移到上一个单词
-     */
-    prevWord(): Cursor {
-        let pos = this.offset;
-
-        // 如果前一个字符不是单词字符，先跳过
-        if (pos > 0 && !this.isWordChar(this.text[pos - 1])) {
-            pos--;
-        }
-
-        // 跳过空白字符
-        while (pos > 0 && !this.isWordChar(this.text[pos - 1])) {
-            pos--;
-        }
-
-        // 跳过单词字符到单词开头
-        while (pos > 0 && this.isWordChar(this.text[pos - 1])) {
-            pos--;
-        }
-
-        return new Cursor(this.text, pos);
-    }
-
-    /**
-     * 删除前一个单词
-     */
-    deleteWordBefore(): Cursor {
-        const wordStart = this.prevWord();
-        const newText =
-            this.text.slice(0, wordStart.offset) +
-            this.text.slice(this.offset);
-
-        return new Cursor(newText, wordStart.offset);
-    }
-
-    /**
-     * 删除后一个单词
-     */
-    deleteWordAfter(): Cursor {
-        const wordEnd = this.nextWord();
-        const newText =
-            this.text.slice(0, this.offset) +
-            this.text.slice(wordEnd.offset);
-
-        return new Cursor(newText, this.offset);
-    }
-
-    /**
-     * 判断字符是否是单词字符
-     */
-    private isWordChar(char: string | undefined): boolean {
-        if (!char) return false;
-        return /\w/.test(char);
-    }
-
-    /**
-     * 判断是否在开头
-     */
-    isAtStart(): boolean {
-        return this.offset === 0;
-    }
-
-    /**
-     * 判断是否在结尾
-     */
-    isAtEnd(): boolean {
-        return this.offset === this.text.length;
-    }
-
-    /**
-     * 比较两个 Cursor 是否相等
-     */
-    equals(other: Cursor): boolean {
-        return this.text === other.text && this.offset === other.offset;
-    }
-
-    /**
-     * 清空所有文本
-     */
-    clear(): Cursor {
-        return new Cursor('', 0);
-    }
+  equals(other: MeasuredText): boolean {
+    return this.text === other.text && this.columns === other.columns;
+  }
 }

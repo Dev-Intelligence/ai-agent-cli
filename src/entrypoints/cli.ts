@@ -33,8 +33,6 @@ import { MCPRegistry } from '../services/mcp/registry.js';
 import { initTokenTracker } from '../utils/tokenTracker.js';
 import { HierarchicalAbortController } from '../core/abort.js';
 import { patchConsole } from '../ui/ink/patchConsole.js';
-import { KeybindingRegistry, DEFAULT_KEYBINDINGS } from '../ui/keybindings.js';
-import { loadKeybindings } from '../services/config/keybindings.js';
 import type { Message, ContentBlock } from '../core/types.js';
 import type { SlashCommandContext } from '../commands/registry.js';
 
@@ -126,11 +124,7 @@ async function main(): Promise<void> {
       registry.register(cmd);
     }
 
-    // 14. 初始化按键映射注册表
-    const userKeybindings = loadKeybindings(config.workdir);
-    const keybindingRegistry = new KeybindingRegistry(DEFAULT_KEYBINDINGS, userKeybindings.length > 0 ? userKeybindings : undefined);
-
-    // 15. 触发 SessionStart Hook
+    // 14. 触发 SessionStart Hook
     if (hookManager.hasHooksFor('SessionStart')) {
       await hookManager.emit('SessionStart', { workdir: config.workdir });
     }
@@ -352,7 +346,6 @@ async function main(): Promise<void> {
         onInput: handleUserInput,
         onExit: handleExit,
         commandNames: registry.getCommandNames(),
-        keybindingRegistry,
         getTokenStats: () => {
           const stats = tokenTracker.getStats();
           return { totalTokens: stats.totalTokens, totalCost: stats.totalCost };
