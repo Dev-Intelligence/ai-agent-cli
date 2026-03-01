@@ -13,16 +13,18 @@ import { StreamingText } from './components/StreamingText.js';
 import { DynamicArea } from './components/ActiveArea.js';
 import type { TokenStatsSnapshot } from './components/EnhancedSpinner.js';
 import type { SlashCommandItem } from './completion/types.js';
+import { useCancelRequest } from './hooks/useCancelRequest.js';
 
 export interface AppProps {
   store: AppStore;
   onInput: (text: string) => void;
   onExit: () => void;
+  onInterrupt: () => void;
   slashCommands: SlashCommandItem[];
   getTokenStats?: () => TokenStatsSnapshot;
 }
 
-export function App({ store, onInput, onExit, slashCommands, getTokenStats }: AppProps) {
+export function App({ store, onInput, onExit, onInterrupt, slashCommands, getTokenStats }: AppProps) {
   // 精确订阅：只在对应 slice 变化时重渲染
   const completedItems = useAppStore(store, (s) => s.completedItems);
   const activeToolUses = useAppStore(store, (s) => s.activeToolUses);
@@ -31,6 +33,8 @@ export function App({ store, onInput, onExit, slashCommands, getTokenStats }: Ap
   const focus = useAppStore(store, (s) => s.focus);
   const tokenInfo = useAppStore(store, (s) => s.tokenInfo);
   const isLoading = Boolean(loading || streaming || activeToolUses.length > 0);
+
+  useCancelRequest({ isLoading, focus, onInterrupt });
 
   return (
     <Box flexDirection="column">

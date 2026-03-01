@@ -42,6 +42,7 @@ import type { SlashCommandContext } from '../commands/registry.js';
 let rootAbort: HierarchicalAbortController | null = null;
 let unmountInk: (() => void) | null = null;
 let restoreConsole: (() => void) | null = null;
+let interruptHandler: (() => void) | null = null;
 
 /**
  * 解析斜杠命令
@@ -438,6 +439,18 @@ async function main(): Promise<void> {
       mcpRegistry.disconnectAll();
     }
 
+    // 24. 中断处理（ESC / Ctrl+C）
+    function handleInterrupt(): void {
+      if (rootAbort && !rootAbort.signal.aborted) {
+        // AI 生成中：级联中断所有子代理
+        rootAbort.abort();
+        rootAbort = null;
+        return;
+      }
+      // 空闲状态：退出 Ink 应用
+      unmountInk?.();
+    }
+
     // 24. 拦截 console 输出到 TUI（在 render 前启用）
     restoreConsole = patchConsole(appStore);
 
@@ -447,6 +460,7 @@ async function main(): Promise<void> {
         store: appStore,
         onInput: handleUserInput,
         onExit: handleExit,
+        onInterrupt: handleInterrupt,
         slashCommands,
         getTokenStats: () => {
           const stats = tokenTracker.getStats();
@@ -456,6 +470,7 @@ async function main(): Promise<void> {
       { exitOnCtrlC: false }
     );
     unmountInk = unmount;
+    interruptHandler = handleInterrupt;
 
     // 等待应用退出
     await waitUntilExit();
@@ -483,14 +498,16 @@ process.on('unhandledRejection', (reason) => {
 
 // 处理 Ctrl+C（智能中断：生成中中断生成，空闲时退出程序）
 process.on('SIGINT', () => {
+  if (interruptHandler) {
+    interruptHandler();
+    return;
+  }
   if (rootAbort && !rootAbort.signal.aborted) {
-    // AI 生成中：级联中断所有子代理
     rootAbort.abort();
     rootAbort = null;
-  } else {
-    // 空闲状态或已中断：退出 Ink 应用
-    unmountInk?.();
+    return;
   }
+  unmountInk?.();
 });
 
 // 启动
