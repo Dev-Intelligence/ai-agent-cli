@@ -230,7 +230,11 @@ async function main(): Promise<void> {
     };
 
     // 22. 用户输入处理回调（由 Ink UserInput 组件触发）
-    async function handleUserInput(text: string): Promise<void> {
+    // 对标 Kode stream-json：支持排队输入，串行处理
+    const pendingUserInputs: string[] = [];
+    let isDrainingQueue = false;
+
+    async function processSingleInput(text: string): Promise<void> {
       try {
         // 检查退出命令
         if (!text || ['exit', 'quit', 'q'].includes(text.toLowerCase())) {
@@ -390,10 +394,40 @@ async function main(): Promise<void> {
         if (history.length > 0 && history[history.length - 1].role === 'user') {
           history.pop();
         }
+      } finally {
+        // 确保回到输入阶段
+        inkController.goToInput();
+      }
+    }
+
+    async function drainQueuedInputs(): Promise<void> {
+      if (isDrainingQueue) return;
+      isDrainingQueue = true;
+      try {
+        while (pendingUserInputs.length > 0) {
+          const nextInput = pendingUserInputs.shift()!;
+          await processSingleInput(nextInput);
+        }
+      } finally {
+        isDrainingQueue = false;
+        if (pendingUserInputs.length > 0) {
+          void drainQueuedInputs();
+        }
+      }
+    }
+
+    async function handleUserInput(text: string): Promise<void> {
+      // 空输入直接忽略
+      if (!text) return;
+
+      // 退出命令不入队，立即处理
+      if (['exit', 'quit', 'q'].includes(text.toLowerCase())) {
+        await processSingleInput(text);
+        return;
       }
 
-      // 确保回到输入阶段
-      inkController.goToInput();
+      pendingUserInputs.push(text);
+      void drainQueuedInputs();
     }
 
     // 23. 退出处理（Ctrl+D 触发）
