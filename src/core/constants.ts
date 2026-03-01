@@ -45,6 +45,12 @@ export const INTERRUPT_MESSAGE = '[用户中断]';
 export const INTERRUPT_MESSAGE_FOR_TOOL_USE = '[用户在工具执行期间中断]';
 
 /**
+ * 工具结果特殊消息
+ */
+export const TOOL_REJECT_MESSAGE = '[工具执行已被用户拒绝]';
+export const TOOL_CANCEL_MESSAGE = '[工具执行已被用户取消]';
+
+/**
  * 边框字符
  */
 export const BORDER = {

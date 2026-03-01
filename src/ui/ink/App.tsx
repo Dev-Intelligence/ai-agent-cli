@@ -25,6 +25,7 @@ export interface AppProps {
 export function App({ store, onInput, onExit, slashCommands, getTokenStats }: AppProps) {
   // 精确订阅：只在对应 slice 变化时重渲染
   const completedItems = useAppStore(store, (s) => s.completedItems);
+  const activeToolUses = useAppStore(store, (s) => s.activeToolUses);
   const loading = useAppStore(store, (s) => s.loading);
   const streaming = useAppStore(store, (s) => s.streaming);
   const focus = useAppStore(store, (s) => s.focus);
@@ -48,6 +49,7 @@ export function App({ store, onInput, onExit, slashCommands, getTokenStats }: Ap
         slashCommands={slashCommands}
         getTokenStats={getTokenStats}
         tokenInfo={tokenInfo}
+        activeToolUses={activeToolUses}
       />
     </Box>
   );

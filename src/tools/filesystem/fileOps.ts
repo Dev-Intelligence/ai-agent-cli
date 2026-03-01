@@ -50,10 +50,6 @@ export async function runRead(
         .map((line, index) => `${startLine + index + 1}→${line}`)
         .join('\n');
 
-      if (lines.length > limit) {
-        return `${result}\n\n[显示第 ${startLine + 1}-${startLine + limit} 行，共 ${allLines.length} 行]`;
-      }
-
       return result;
     }
 

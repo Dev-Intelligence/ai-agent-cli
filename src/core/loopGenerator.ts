@@ -12,14 +12,15 @@ import type {
   ExecuteToolFunc,
 } from './types.js';
 import type { ProtocolAdapter } from '../services/ai/adapters/base.js';
-import type { PermissionManager } from './permissions.js';
+import type { PermissionDecision, PermissionManager } from './permissions.js';
 import type { HookManager } from './hooks.js';
 import type { TokenTracker } from '../utils/tokenTracker.js';
 import type { HierarchicalAbortController } from './abort.js';
 import type { AgentEvent } from './agentEvent.js';
 import { getReminderManager } from './reminder.js';
 import { withRetry } from '../utils/retry.js';
-import { DEFAULTS } from './constants.js';
+import { DEFAULTS, TOOL_REJECT_MESSAGE } from './constants.js';
+import { getCommandSubcommandPrefix } from './commandPrefix.js';
 
 /**
  * Generator 版代理循环配置
@@ -273,6 +274,22 @@ export async function* agentLoopGenerator(
       const toolNames = toolCalls.map((tc) => tc.name);
       reminderManager.recordToolCalls(toolNames);
 
+      // 8.6 工具进入队列（用于 UI 展示）
+      if (!silent) {
+        for (const toolCall of toolCalls) {
+          eventQueue.enqueue({
+            type: 'tool_queued',
+            toolUseId: toolCall.id,
+            toolName: toolCall.name,
+            input: toolCall.input,
+          });
+        }
+
+        for await (const event of eventQueue.drain()) {
+          yield event;
+        }
+      }
+
       // 9. 权限检查
       if (permissionManager) {
         for (const toolCall of toolCalls) {
@@ -288,6 +305,18 @@ export async function* agentLoopGenerator(
             ];
             const toolResultsMessage = adapter.formatToolResults(toolResults);
             currentHistory.push(toolResultsMessage);
+            if (!silent) {
+              eventQueue.enqueue({
+                type: 'tool_result',
+                toolUseId: toolCall.id,
+                toolName: toolCall.name,
+                result: toolResults[0]!.content,
+                isError: true,
+              });
+              for await (const event of eventQueue.drain()) {
+                yield event;
+              }
+            }
             continue;
           }
 
@@ -301,10 +330,28 @@ export async function* agentLoopGenerator(
             }
 
             // 1. 创建 Promise，捕获 resolve
-            let confirmResolve!: (r: 'allow' | 'deny' | 'always') => void;
-            const confirmationPromise = new Promise<'allow' | 'deny' | 'always'>((resolve) => {
+            let confirmResolve!: (r: PermissionDecision) => void;
+            const confirmationPromise = new Promise<PermissionDecision>((resolve) => {
               confirmResolve = resolve;
             });
+
+            let commandPrefix: string | null | undefined;
+            let commandInjectionDetected: boolean | undefined;
+            if (toolCall.name === 'bash') {
+              const command = typeof toolCall.input.command === 'string' ? toolCall.input.command : '';
+              if (command) {
+                try {
+                  const prefixResult = await getCommandSubcommandPrefix(command, adapter);
+                  if (prefixResult?.commandInjectionDetected) {
+                    commandInjectionDetected = true;
+                  } else {
+                    commandPrefix = prefixResult?.commandPrefix ?? null;
+                  }
+                } catch {
+                  // 前缀检测失败不影响权限流程
+                }
+              }
+            }
 
             // 2. 入队事件（携带 resolve）
             eventQueue.enqueue({
@@ -312,6 +359,8 @@ export async function* agentLoopGenerator(
               toolName: toolCall.name,
               params: toolCall.input,
               reason: checkResult.reason,
+              commandPrefix,
+              commandInjectionDetected,
               resolve: confirmResolve,
             });
 
@@ -323,20 +372,36 @@ export async function* agentLoopGenerator(
             // 4. 消费者处理完后 resolve，此时 await 立即返回
             const confirmation = await confirmationPromise;
 
-            if (confirmation === 'always') {
-              permissionManager.setAlwaysAllow(toolCall.name);
+            if (confirmation.decision === 'allow_always') {
+              permissionManager.setAlwaysAllow(toolCall.name, {
+                scope: confirmation.scope,
+                key: confirmation.key,
+                params: toolCall.input,
+              });
             }
 
-            if (confirmation === 'deny') {
+            if (confirmation.decision === 'deny') {
               const toolResults: ToolResult[] = [
                 {
                   tool_use_id: toolCall.id,
-                  content: '用户拒绝了此操作',
+                  content: TOOL_REJECT_MESSAGE,
                   is_error: true,
                 },
               ];
               const toolResultsMessage = adapter.formatToolResults(toolResults);
               currentHistory.push(toolResultsMessage);
+              if (!silent) {
+                eventQueue.enqueue({
+                  type: 'tool_result',
+                  toolUseId: toolCall.id,
+                  toolName: toolCall.name,
+                  result: TOOL_REJECT_MESSAGE,
+                  isError: true,
+                });
+                for await (const event of eventQueue.drain()) {
+                  yield event;
+                }
+              }
               continue;
             }
           }
@@ -370,6 +435,7 @@ export async function* agentLoopGenerator(
           if (!silent) {
             eventQueue.enqueue({
               type: 'tool_start',
+              toolUseId: toolCall.id,
               toolName: toolCall.name,
               input: toolCall.input,
             });
@@ -398,6 +464,7 @@ export async function* agentLoopGenerator(
           if (!silent) {
             eventQueue.enqueue({
               type: 'tool_result',
+              toolUseId: toolCall.id,
               toolName: toolCall.name,
               result,
               isError,
@@ -424,6 +491,7 @@ export async function* agentLoopGenerator(
           if (!silent) {
             eventQueue.enqueue({
               type: 'tool_result',
+              toolUseId: toolCall.id,
               toolName: toolCall.name,
               result: `工具执行失败: ${errorMsg}`,
               isError: true,

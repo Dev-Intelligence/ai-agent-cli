@@ -2,6 +2,8 @@
  * Ink UI 类型定义
  */
 
+import type { PermissionDecision } from '../../core/permissions.js';
+
 /**
  * Banner 配置接口
  */
@@ -21,7 +23,8 @@ export type CompletedItem =
   | { id: string; type: 'banner'; config: BannerConfig }
   | { id: string; type: 'user_message'; text: string }
   | { id: string; type: 'ai_message'; text: string; elapsed?: number }
-  | { id: string; type: 'tool_call'; name: string; detail?: string; result?: string; isError?: boolean; mergedCount?: number }
+  | { id: string; type: 'tool_use'; toolUseId: string; name: string; detail?: string; status: 'done' | 'error' }
+  | { id: string; type: 'tool_result'; toolUseId: string; name: string; content: string; isError?: boolean; input?: Record<string, unknown> }
   | { id: string; type: 'system'; level: 'success' | 'error' | 'warning' | 'info'; text: string }
   | { id: string; type: 'divider' };
 
@@ -63,7 +66,15 @@ export type StreamingState = {
 /** 焦点目标 */
 export type FocusTarget =
   | undefined // 显示输入框
-  | { type: 'permission'; toolName: string; params: Record<string, unknown>; reason?: string; resolve: (r: 'allow' | 'deny' | 'always') => void }
+  | {
+      type: 'permission';
+      toolName: string;
+      params: Record<string, unknown>;
+      reason?: string;
+      commandPrefix?: string | null;
+      commandInjectionDetected?: boolean;
+      resolve: (r: PermissionDecision) => void;
+    }
   | { type: 'question'; questions: unknown[]; resolve: (r: string) => void };
 
 /**
@@ -73,9 +84,18 @@ export type CompletedItemInput =
   | { type: 'banner'; config: BannerConfig }
   | { type: 'user_message'; text: string }
   | { type: 'ai_message'; text: string; elapsed?: number }
-  | { type: 'tool_call'; name: string; detail?: string; result?: string; isError?: boolean; mergedCount?: number }
+  | { type: 'tool_use'; toolUseId: string; name: string; detail?: string; status: 'done' | 'error' }
+  | { type: 'tool_result'; toolUseId: string; name: string; content: string; isError?: boolean; input?: Record<string, unknown> }
   | { type: 'system'; level: 'success' | 'error' | 'warning' | 'info'; text: string }
   | { type: 'divider' };
+
+/** 活跃中的工具调用（非 Static，允许动画与状态更新） */
+export type ActiveToolUse = {
+  toolUseId: string;
+  name: string;
+  detail?: string;
+  status: 'queued' | 'running';
+};
 
 /**
  * 生成唯一 ID

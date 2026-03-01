@@ -5,7 +5,16 @@
  * 实现精确订阅和 React 外读写。
  */
 
-import type { AppPhase, CompletedItem, CompletedItemInput, BannerConfig, LoadingState, StreamingState, FocusTarget } from './types.js';
+import type {
+  AppPhase,
+  CompletedItem,
+  CompletedItemInput,
+  BannerConfig,
+  LoadingState,
+  StreamingState,
+  FocusTarget,
+  ActiveToolUse,
+} from './types.js';
 import { generateId } from './types.js';
 import type { Theme } from '../theme.js';
 
@@ -16,6 +25,7 @@ export interface AppState {
   /** @deprecated 由 loading/streaming/focus 替代 */
   phase: AppPhase;
   completedItems: CompletedItem[];
+  activeToolUses: ActiveToolUse[];
   theme: Theme;
   loading: LoadingState;
   streaming: StreamingState;
@@ -57,11 +67,12 @@ export class AppStore {
     this.setState(() => ({ phase }));
   }
 
-  addCompleted(item: CompletedItemInput): void {
+  addCompleted(item: CompletedItemInput): string {
     const fullItem = { ...item, id: generateId() } as CompletedItem;
     this.setState((prev) => ({
       completedItems: [...prev.completedItems, fullItem],
     }));
+    return fullItem.id;
   }
 
   /**
@@ -70,6 +81,14 @@ export class AppStore {
   replaceLastCompleted(item: CompletedItem): void {
     this.setState((prev) => ({
       completedItems: [...prev.completedItems.slice(0, -1), item],
+    }));
+  }
+
+  updateCompletedById(id: string, updater: (item: CompletedItem) => CompletedItem): void {
+    this.setState((prev) => ({
+      completedItems: prev.completedItems.map((item) =>
+        item.id === id ? updater(item) : item
+      ),
     }));
   }
 
@@ -119,6 +138,28 @@ export class AppStore {
     }));
   }
 
+  // ─── 活跃工具调用 ───
+
+  addActiveToolUse(toolUse: ActiveToolUse): void {
+    this.setState((prev) => ({
+      activeToolUses: [...prev.activeToolUses, toolUse],
+    }));
+  }
+
+  updateActiveToolUse(toolUseId: string, updater: (item: ActiveToolUse) => ActiveToolUse): void {
+    this.setState((prev) => ({
+      activeToolUses: prev.activeToolUses.map((item) =>
+        item.toolUseId === toolUseId ? updater(item) : item
+      ),
+    }));
+  }
+
+  removeActiveToolUse(toolUseId: string): void {
+    this.setState((prev) => ({
+      activeToolUses: prev.activeToolUses.filter((item) => item.toolUseId !== toolUseId),
+    }));
+  }
+
   /**
    * 创建带 banner 的初始状态
    */
@@ -130,6 +171,7 @@ export class AppStore {
     return {
       phase: { type: 'input' },
       completedItems,
+      activeToolUses: [],
       theme,
       loading: null,
       streaming: null,

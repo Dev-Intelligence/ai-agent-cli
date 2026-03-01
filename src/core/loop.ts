@@ -91,15 +91,15 @@ export async function agentLoop(
         break;
 
       case 'tool_start':
-        uiController.showToolStart(event.toolName, event.input);
+        uiController.showToolStart(event.toolName, event.toolUseId, event.input);
         break;
 
       case 'tool_result':
-        if (event.isError) {
-          uiController.showToolOutput(event.result, { isError: true, maxLines: 5 });
-        } else {
-          uiController.showToolResult(event.toolName, event.result);
-        }
+        uiController.showToolResult(event.toolName, event.toolUseId, event.result, event.isError);
+        break;
+
+      case 'tool_queued':
+        uiController.showToolQueued(event.toolName, event.toolUseId, event.input);
         break;
 
       case 'permission_request':
@@ -108,11 +108,15 @@ export async function agentLoop(
           const result = await uiController.requestPermission(
             event.toolName,
             event.params,
-            event.reason
+            event.reason,
+            {
+              commandPrefix: event.commandPrefix,
+              commandInjectionDetected: event.commandInjectionDetected,
+            }
           );
           event.resolve(result);
         } catch {
-          event.resolve('deny');
+          event.resolve({ decision: 'deny' });
         }
         break;
 

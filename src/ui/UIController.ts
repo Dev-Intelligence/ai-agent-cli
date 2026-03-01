@@ -3,6 +3,8 @@
  * 抽象所有 UI 输出操作，使核心逻辑与具体 UI 实现解耦
  */
 
+import type { PermissionDecision } from '../core/permissions.js';
+
 /**
  * UI 控制器接口
  */
@@ -19,24 +21,25 @@ export interface UIController {
   /** 完成流式输出，渲染最终文本 */
   finalizeStream(fullText: string, isMarkdown: boolean): void;
 
+  /** 显示工具进入队列 */
+  showToolQueued(toolName: string, toolUseId: string, input?: Record<string, unknown>): void;
+
   /** 显示工具开始执行 */
-  showToolStart(toolName: string, input?: Record<string, unknown>): void;
+  showToolStart(toolName: string, toolUseId: string, input?: Record<string, unknown>): void;
 
   /** 显示工具执行结果 */
-  showToolResult(toolName: string, result: string, input?: Record<string, unknown>): void;
-
-  /** 显示工具输出（多行） */
-  showToolOutput(output: string, opts?: { isError?: boolean; maxLines?: number }): void;
-
-  /** 显示工具错误 */
-  showToolError(toolName: string, error: string): void;
+  showToolResult(toolName: string, toolUseId: string, result: string, isError: boolean): void;
 
   /** 请求权限确认 */
   requestPermission(
     toolName: string,
     params: Record<string, unknown>,
-    reason?: string
-  ): Promise<'allow' | 'deny' | 'always'>;
+    reason?: string,
+    options?: {
+      commandPrefix?: string | null;
+      commandInjectionDetected?: boolean;
+    }
+  ): Promise<PermissionDecision>;
 
   /** 显示警告消息 */
   showWarning(msg: string): void;

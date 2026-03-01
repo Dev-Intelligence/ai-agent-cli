@@ -11,7 +11,7 @@
  * 子元素直接暴露给父级 Box(column)，由 App.tsx 的根 Box 负责布局。
  */
 
-import type { LoadingState, FocusTarget } from '../types.js';
+import type { LoadingState, FocusTarget, ActiveToolUse } from '../types.js';
 import { EnhancedSpinner } from './EnhancedSpinner.js';
 import type { TokenStatsSnapshot } from './EnhancedSpinner.js';
 import { UserInput } from './UserInput.js';
@@ -19,6 +19,7 @@ import { PermissionPrompt } from './PermissionPrompt.js';
 import type { QuestionDef } from './QuestionPrompt.js';
 import { QuestionPrompt } from './QuestionPrompt.js';
 import type { SlashCommandItem } from '../completion/types.js';
+import { ToolUseView } from './ToolUseView.js';
 
 export interface DynamicAreaProps {
   loading: LoadingState;
@@ -28,13 +29,38 @@ export interface DynamicAreaProps {
   slashCommands: SlashCommandItem[];
   getTokenStats?: () => TokenStatsSnapshot;
   tokenInfo?: string | null;
+  activeToolUses: ActiveToolUse[];
 }
 
-export function DynamicArea({ loading, focus, onInput, onExit, slashCommands, getTokenStats, tokenInfo }: DynamicAreaProps) {
+export function DynamicArea({
+  loading,
+  focus,
+  onInput,
+  onExit,
+  slashCommands,
+  getTokenStats,
+  tokenInfo,
+  activeToolUses,
+}: DynamicAreaProps) {
   return (
     <>
       {/* Spinner — loading 非 null 时显示，与对话框/输入共存 */}
       {loading && <EnhancedSpinner loading={loading} getTokenStats={getTokenStats} />}
+
+      {/* 活跃工具调用（非 Static，可动画） */}
+      {activeToolUses.length > 0 && (
+        <>
+          {activeToolUses.map((toolUse) => (
+            <ToolUseView
+              key={toolUse.toolUseId}
+              name={toolUse.name}
+              detail={toolUse.detail}
+              status={toolUse.status}
+              animate={toolUse.status === 'running'}
+            />
+          ))}
+        </>
+      )}
 
       {/* 焦点驱动的对话框（互斥） */}
       {focus?.type === 'permission' && (
@@ -42,6 +68,8 @@ export function DynamicArea({ loading, focus, onInput, onExit, slashCommands, ge
           toolName={focus.toolName}
           params={focus.params}
           reason={focus.reason}
+          commandPrefix={focus.commandPrefix}
+          commandInjectionDetected={focus.commandInjectionDetected}
           onResolve={focus.resolve}
         />
       )}

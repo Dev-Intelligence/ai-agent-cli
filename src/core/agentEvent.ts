@@ -6,20 +6,24 @@
  */
 
 import type { Message } from './types.js';
+import type { PermissionDecision } from './permissions.js';
 
 export type AgentEvent =
   | { type: 'thinking_start' }
   | { type: 'thinking_stop' }
   | { type: 'stream_text'; text: string }
   | { type: 'stream_done'; fullText: string }
-  | { type: 'tool_start'; toolName: string; input: Record<string, unknown> }
-  | { type: 'tool_result'; toolName: string; result: string; isError: boolean }
+  | { type: 'tool_queued'; toolUseId: string; toolName: string; input: Record<string, unknown> }
+  | { type: 'tool_start'; toolUseId: string; toolName: string; input: Record<string, unknown> }
+  | { type: 'tool_result'; toolUseId: string; toolName: string; result: string; isError: boolean }
   | {
       type: 'permission_request';
       toolName: string;
       params: Record<string, unknown>;
       reason?: string;
-      resolve: (r: 'allow' | 'deny' | 'always') => void;
+      commandPrefix?: string | null;
+      commandInjectionDetected?: boolean;
+      resolve: (r: PermissionDecision) => void;
     }
   | { type: 'retry'; attempt: number; maxAttempts: number; delay: number; error: string }
   | { type: 'error'; message: string }

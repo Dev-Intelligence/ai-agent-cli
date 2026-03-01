@@ -46,7 +46,10 @@ export interface PermissionCheckResult {
 /**
  * 用户确认结果
  */
-export type ConfirmationResult = 'allow' | 'deny' | 'always';
+export type PermissionDecision =
+  | { decision: 'allow' }
+  | { decision: 'deny'; message?: string }
+  | { decision: 'allow_always'; scope: 'tool' | 'command' | 'prefix'; key?: string };
 
 /**
  * 需要权限确认的工具列表（按危险等级分类）
@@ -91,7 +94,7 @@ const DEFAULT_CONFIG: PermissionConfig = {
  */
 export class PermissionManager {
   private config: PermissionConfig;
-  private alwaysAllowed = new Map<string, Set<string>>(); // tool -> Set<paramsHash>
+  private alwaysAllowed = new Map<string, Set<string>>(); // tool -> Set<rule>
 
   constructor(config?: Partial<PermissionConfig>) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -114,12 +117,28 @@ export class PermissionManager {
   /**
    * 添加永久允许规则
    */
-  setAlwaysAllow(toolName: string, params?: Record<string, string>): void {
-    const paramsHash = params ? JSON.stringify(params) : '*';
+  setAlwaysAllow(
+    toolName: string,
+    options?: { scope?: 'tool' | 'command' | 'prefix'; key?: string; params?: Record<string, unknown> }
+  ): void {
+    const scope = options?.scope ?? 'tool';
+    let rule: string;
+    if (scope === 'tool') {
+      rule = '*';
+    } else if (scope === 'prefix') {
+      rule = `prefix:${options?.key || ''}`;
+    } else {
+      if (options?.key) {
+        rule = `command:${options.key}`;
+      } else {
+        rule = `params:${JSON.stringify(options?.params || {})}`;
+      }
+    }
+
     if (!this.alwaysAllowed.has(toolName)) {
       this.alwaysAllowed.set(toolName, new Set());
     }
-    this.alwaysAllowed.get(toolName)!.add(paramsHash);
+    this.alwaysAllowed.get(toolName)!.add(rule);
   }
 
   /**
@@ -207,7 +226,7 @@ export class PermissionManager {
     toolName: string,
     params: Record<string, unknown>,
     reason?: string
-  ): Promise<ConfirmationResult> {
+  ): Promise<PermissionDecision> {
     const rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
@@ -234,17 +253,17 @@ export class PermissionManager {
       rl.close();
 
       if (answer === 'n' || answer === 'no') {
-        return 'deny';
+        return { decision: 'deny' };
       }
       if (answer === 'always' || answer === 'a') {
         this.setAlwaysAllow(toolName);
-        return 'always';
+        return { decision: 'allow_always', scope: 'tool' };
       }
       // 默认允许（Enter / y / yes）
-      return 'allow';
+      return { decision: 'allow' };
     } catch {
       rl.close();
-      return 'allow'; // 出错时默认允许
+      return { decision: 'allow' }; // 出错时默认允许
     }
   }
 
@@ -300,8 +319,24 @@ export class PermissionManager {
     if (allowed.has('*')) return true;
 
     if (params) {
-      const paramsHash = JSON.stringify(params);
-      return allowed.has(paramsHash);
+      const paramsHash = `params:${JSON.stringify(params)}`;
+      if (allowed.has(paramsHash)) return true;
+
+      if (toolName === 'bash') {
+        const command = typeof params.command === 'string' ? params.command : '';
+        if (command) {
+          for (const rule of allowed) {
+            if (!rule.startsWith('prefix:')) continue;
+            const prefix = rule.slice('prefix:'.length);
+            if (prefix && command.startsWith(prefix)) {
+              return true;
+            }
+          }
+          if (allowed.has(`command:${command}`)) {
+            return true;
+          }
+        }
+      }
     }
 
     return false;

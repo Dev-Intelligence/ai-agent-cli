@@ -16,13 +16,12 @@ import type { TokenTracker } from '../../utils/tokenTracker.js';
 export class InkUIController implements UIController {
   private store: AppStore;
   private tokenTracker?: TokenTracker;
+  private toolInputById = new Map<string, Record<string, unknown>>();
 
   // 流式文本批量 flush 相关
   private _streamFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private _currentStreamText = '';
 
-  // 当前工具调用的 detail（在 showToolStart 时保存，showToolResult 时使用）
-  private _currentToolDetail?: string;
 
   constructor(store: AppStore, tokenTracker?: TokenTracker) {
     this.store = store;
@@ -67,17 +66,16 @@ export class InkUIController implements UIController {
         break;
 
       case 'tool_start':
-        this.showToolStart(event.toolName, event.input);
+        this.showToolStart(event.toolName, event.toolUseId, event.input);
         break;
 
       case 'tool_result':
-        if (event.isError) {
-          this.showToolOutput(event.result, { isError: true, maxLines: 5 });
-        } else {
-          this.showToolResult(event.toolName, event.result);
-        }
+        this.showToolResult(event.toolName, event.toolUseId, event.result, event.isError);
         break;
 
+      case 'tool_queued':
+        this.showToolQueued(event.toolName, event.toolUseId, event.input);
+        break;
       case 'permission_request': {
         const result = await this.requestPermission(
           event.toolName,
@@ -176,19 +174,53 @@ export class InkUIController implements UIController {
     });
   }
 
-  showToolStart(toolName: string, input?: Record<string, unknown>): void {
-    let detail: string | undefined;
+  showToolQueued(toolName: string, toolUseId: string, input?: Record<string, unknown>): void {
+    const detail = input ? this._summarizeToolInput(toolName, input) : undefined;
     if (input) {
-      detail = this._summarizeToolInput(toolName, input);
+      this.toolInputById.set(toolUseId, input);
     }
-    this._currentToolDetail = detail;
-    this.store.setLoading({
-      mode: 'tool_use',
-      startTime: Date.now(),
-      toolName,
-      toolDetail: detail,
-      ...this._getTokenSnapshot(),
+    // 工具进入队列后不再显示全局 spinner
+    this.store.setLoading(null);
+    const exists = this.store.getState().activeToolUses.some((item) => item.toolUseId === toolUseId);
+    if (exists) {
+      this.store.updateActiveToolUse(toolUseId, (item) => ({
+        ...item,
+        name: toolName,
+        detail: item.detail || detail,
+        status: 'queued',
+      }));
+      return;
+    }
+    this.store.addActiveToolUse({
+      toolUseId,
+      name: toolName,
+      detail,
+      status: 'queued',
     });
+  }
+
+  showToolStart(toolName: string, toolUseId: string, input?: Record<string, unknown>): void {
+    const detail = input ? this._summarizeToolInput(toolName, input) : undefined;
+    if (input && !this.toolInputById.has(toolUseId)) {
+      this.toolInputById.set(toolUseId, input);
+    }
+    this.store.setLoading(null);
+    const active = this.store.getState().activeToolUses.find((item) => item.toolUseId === toolUseId);
+    if (!active) {
+      this.store.addActiveToolUse({
+        toolUseId,
+        name: toolName,
+        detail,
+        status: 'running',
+      });
+      return;
+    }
+    this.store.updateActiveToolUse(toolUseId, (item) => ({
+      ...item,
+      name: toolName,
+      detail: item.detail || detail,
+      status: 'running',
+    }));
   }
 
   /**
@@ -242,59 +274,39 @@ export class InkUIController implements UIController {
     return keys.join(', ');
   }
 
-  showToolResult(toolName: string, result: string, _input?: Record<string, unknown>): void {
-    // 保留多行结果，由 ToolCallView 负责截断展示
-    const maxChars = 500;
-    const truncated = result.length > maxChars ? result.slice(0, maxChars) : result;
+  showToolResult(toolName: string, toolUseId: string, result: string, isError: boolean): void {
+    // 工具结束：移除活跃状态并追加静态记录
+    const active = this.store.getState().activeToolUses.find(
+      (item) => item.toolUseId === toolUseId
+    );
+    const toolInput = this.toolInputById.get(toolUseId);
+    this.toolInputById.delete(toolUseId);
+    this.store.removeActiveToolUse(toolUseId);
 
-    // 尝试合并连续同名工具调用（如多个 read_file / Glob）
-    const items = this.store.getState().completedItems;
-    const lastItem = items[items.length - 1];
-
-    if (lastItem?.type === 'tool_call' && lastItem.name === toolName && !lastItem.isError) {
-      const count = (lastItem.mergedCount || 1) + 1;
-      this.store.replaceLastCompleted({
-        ...lastItem,
-        mergedCount: count,
-        // 合并后隐藏个别 detail 和 result
-        detail: undefined,
-        result: undefined,
-      });
-    } else {
-      this.store.addCompleted({
-        type: 'tool_call',
-        name: toolName,
-        detail: this._currentToolDetail,
-        result: truncated,
-      });
-    }
-
-    this._currentToolDetail = undefined;
-  }
-
-  showToolOutput(output: string, opts?: { isError?: boolean; maxLines?: number }): void {
     this.store.addCompleted({
-      type: 'tool_call',
-      name: 'output',
-      result: output,
-      isError: opts?.isError,
-    });
-  }
-
-  showToolError(toolName: string, error: string): void {
-    this.store.addCompleted({
-      type: 'tool_call',
+      type: 'tool_use',
+      toolUseId,
       name: toolName,
-      result: error,
-      isError: true,
+      detail: active?.detail,
+      status: isError ? 'error' : 'done',
+    });
+
+    this.store.addCompleted({
+      type: 'tool_result',
+      toolUseId,
+      name: toolName,
+      content: result,
+      isError,
+      input: toolInput,
     });
   }
 
   async requestPermission(
     toolName: string,
     params: Record<string, unknown>,
-    reason?: string
-  ): Promise<'allow' | 'deny' | 'always'> {
+    reason?: string,
+    options?: { commandPrefix?: string | null; commandInjectionDetected?: boolean }
+  ): Promise<import('../../core/permissions.js').PermissionDecision> {
     // 使用内联 focus 对话框替代独立 Ink 实例
     return new Promise((resolve) => {
       this.store.setFocus({
@@ -302,6 +314,8 @@ export class InkUIController implements UIController {
         toolName,
         params,
         reason,
+        commandPrefix: options?.commandPrefix,
+        commandInjectionDetected: options?.commandInjectionDetected,
         resolve: (result) => {
           // 用户做出选择后，清除焦点
           this.store.setFocus(undefined);

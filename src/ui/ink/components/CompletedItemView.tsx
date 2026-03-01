@@ -11,7 +11,8 @@ import { Box, Text } from 'ink';
 import type { CompletedItem } from '../types.js';
 import { BannerView } from './BannerView.js';
 import { SystemMessage } from './SystemMessage.js';
-import { ToolCallView } from './ToolCallView.js';
+import { ToolUseView } from './ToolUseView.js';
+import { ToolResultView } from './ToolResultView.js';
 import { renderMarkdown, isMarkdownContent } from '../../markdown.js';
 import { getInkColors } from '../../theme.js';
 import { UI_SYMBOLS } from '../../../core/constants.js';
@@ -53,15 +54,26 @@ export function CompletedItemView({ item }: CompletedItemViewProps) {
       );
     }
 
-    case 'tool_call':
+    case 'tool_use':
       return (
         <Box marginTop={1}>
-          <ToolCallView
+          <ToolUseView
             name={item.name}
             detail={item.detail}
-            result={item.result}
+            status={item.status === 'error' ? 'error' : 'done'}
+            animate={false}
+          />
+        </Box>
+      );
+
+    case 'tool_result':
+      return (
+        <Box marginTop={1}>
+          <ToolResultView
+            name={item.name}
+            content={item.content}
             isError={item.isError}
-            mergedCount={item.mergedCount}
+            input={item.input}
           />
         </Box>
       );
