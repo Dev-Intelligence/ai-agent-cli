@@ -7,6 +7,126 @@ import type { Message, ToolDefinition, ToolResult, LLMResponse, ContentBlock, To
 import { ProtocolAdapter } from './base.js';
 import type { StreamCallbacks, StreamResult } from './base.js';
 
+const PROMPT_CACHING_ENABLED = !process.env.DISABLE_PROMPT_CACHING;
+
+type CacheControl = { type: 'ephemeral' };
+type CacheTextBlock = { type: 'text'; text: string; cache_control?: CacheControl };
+type AnthropicMessageParam = {
+  role: 'user' | 'assistant';
+  content: Array<Record<string, unknown>>;
+};
+
+function stripCacheControl(block: Record<string, unknown>): Record<string, unknown> {
+  if (block.type !== 'text') return block;
+  const { cache_control, ...rest } = block as Record<string, unknown> & { cache_control?: CacheControl };
+  return rest;
+}
+
+function applyCacheControlWithLimits(
+  systemBlocks: CacheTextBlock[],
+  messageParams: AnthropicMessageParam[]
+): { systemBlocks: CacheTextBlock[]; messageParams: AnthropicMessageParam[] } {
+  if (!PROMPT_CACHING_ENABLED) {
+    return {
+      systemBlocks: systemBlocks.map((block) => stripCacheControl(block) as CacheTextBlock),
+      messageParams: messageParams.map((message) => ({
+        ...message,
+        content: message.content.map((block) => stripCacheControl(block)),
+      })),
+    };
+  }
+
+  const maxCacheBlocks = 4;
+  let usedCacheBlocks = 0;
+
+  const processedSystemBlocks = systemBlocks.map((block) => {
+    if (usedCacheBlocks < maxCacheBlocks && block.text.length > 1000) {
+      usedCacheBlocks++;
+      return {
+        ...block,
+        cache_control: { type: 'ephemeral' as const },
+      };
+    }
+    return stripCacheControl(block) as CacheTextBlock;
+  });
+
+  const processedMessageParams = messageParams.map((message, messageIndex) => {
+    const processedContent = message.content.map((contentBlock, blockIndex) => {
+      const shouldCache =
+        usedCacheBlocks < maxCacheBlocks &&
+        contentBlock.type === 'text' &&
+        typeof contentBlock.text === 'string' &&
+        (contentBlock.text.length > 2000 ||
+          (messageIndex === messageParams.length - 1 &&
+            blockIndex === message.content.length - 1 &&
+            contentBlock.text.length > 500));
+
+      if (shouldCache) {
+        usedCacheBlocks++;
+        return {
+          ...contentBlock,
+          cache_control: { type: 'ephemeral' as const },
+        };
+      }
+
+      return stripCacheControl(contentBlock);
+    });
+
+    return {
+      ...message,
+      content: processedContent,
+    };
+  });
+
+  return {
+    systemBlocks: processedSystemBlocks,
+    messageParams: processedMessageParams,
+  };
+}
+
+function buildSystemBlocks(system: string): CacheTextBlock[] {
+  return [{ type: 'text', text: system }];
+}
+
+function buildAnthropicMessages(messages: Message[]): AnthropicMessageParam[] {
+  return messages.map((msg) => {
+    if (typeof msg.content === 'string') {
+      return {
+        role: msg.role,
+        content: [{ type: 'text', text: msg.content }],
+      };
+    }
+
+    const content = msg.content.map((block) => {
+      if (block.type === 'text') {
+        return { type: 'text', text: block.text };
+      }
+      if (block.type === 'tool_use') {
+        return {
+          type: 'tool_use',
+          id: block.id,
+          name: block.name,
+          input: block.input,
+        };
+      }
+      if (block.type === 'tool_result') {
+        return {
+          type: 'tool_result',
+          tool_use_id: block.tool_use_id,
+          content: block.content,
+          is_error: block.is_error,
+        };
+      }
+      return block as unknown as Record<string, unknown>;
+    });
+
+    return {
+      role: msg.role,
+      content,
+    };
+  });
+}
+
 export class AnthropicAdapter extends ProtocolAdapter {
   private client!: Anthropic;
 
@@ -42,16 +162,16 @@ export class AnthropicAdapter extends ProtocolAdapter {
     }
 
     // 转换消息格式
-    const anthropicMessages: Array<{ role: 'user' | 'assistant'; content: string | Array<any> }> = messages.map((msg) => ({
-      role: msg.role,
-      content: msg.content as string | Array<any>,
-    }));
+    const systemBlocks = buildSystemBlocks(system);
+    const anthropicMessages = buildAnthropicMessages(messages);
+    const { systemBlocks: processedSystem, messageParams: processedMessages } =
+      applyCacheControlWithLimits(systemBlocks, anthropicMessages);
 
     // 调用 API
     const response = await this.client.messages.create({
       model: this.model,
-      system,
-      messages: anthropicMessages,
+      system: processedSystem as any,
+      messages: processedMessages as any,
       tools: tools as Anthropic.Tool[],
       max_tokens: maxTokens,
     });
@@ -123,15 +243,15 @@ export class AnthropicAdapter extends ProtocolAdapter {
       await this.initializeClient();
     }
 
-    const anthropicMessages: Array<{ role: 'user' | 'assistant'; content: string | Array<any> }> = messages.map((msg) => ({
-      role: msg.role,
-      content: msg.content as string | Array<any>,
-    }));
+    const systemBlocks = buildSystemBlocks(system);
+    const anthropicMessages = buildAnthropicMessages(messages);
+    const { systemBlocks: processedSystem, messageParams: processedMessages } =
+      applyCacheControlWithLimits(systemBlocks, anthropicMessages);
 
     const stream = this.client.messages.stream({
       model: this.model,
-      system,
-      messages: anthropicMessages,
+      system: processedSystem as any,
+      messages: processedMessages as any,
       tools: tools as Anthropic.Tool[],
       max_tokens: maxTokens,
     });

@@ -135,3 +135,30 @@ export function countTokensFromUsage(messages: Message[]): number {
     // 回退到估算
     return countTokens(messages);
 }
+
+/**
+ * 从消息历史中获取缓存 Token 使用情况（仅使用最近一条 assistant usage）
+ *
+ * @param messages - 消息历史数组
+ * @returns 缓存 token 统计
+ */
+export function getCacheTokensFromUsage(messages: Message[]): {
+    cacheCreationTokens: number;
+    cacheReadTokens: number;
+    total: number;
+} {
+    for (let i = messages.length - 1; i >= 0; i--) {
+        const msg = messages[i];
+        if (msg.role === 'assistant' && msg.usage) {
+            const cacheCreationTokens = msg.usage.cacheCreationTokens || 0;
+            const cacheReadTokens = msg.usage.cacheReadTokens || 0;
+            return {
+                cacheCreationTokens,
+                cacheReadTokens,
+                total: cacheCreationTokens + cacheReadTokens,
+            };
+        }
+    }
+
+    return { cacheCreationTokens: 0, cacheReadTokens: 0, total: 0 };
+}

@@ -20,7 +20,7 @@ import { App } from '../ui/ink/App.js';
 import { getInputHistory } from '../ui/ink/components/UserInput.js';
 import type { SlashCommandItem } from '../ui/ink/completion/types.js';
 import { getReminderManager } from '../core/reminder.js';
-import { countTokensFromUsage, formatTokenCount, getTokenPercentage } from '../utils/tokenCounter.js';
+import { countTokensFromUsage, formatTokenCount, getTokenPercentage, getCacheTokensFromUsage } from '../utils/tokenCounter.js';
 import { getModelContextLength, getModelDisplayName } from '../utils/modelConfig.js';
 import { getCommandRegistry } from '../commands/registry.js';
 import { getBuiltinCommands } from '../commands/builtinCommands.js';
@@ -252,7 +252,11 @@ async function main(): Promise<void> {
           const currentTokens = countTokensFromUsage(history);
           const percentage = getTokenPercentage(currentTokens, modelContextLength);
           const modelDisplay = getModelDisplayName(config.model);
-          const tokenInfo = `[${config.provider}] ${modelDisplay}: ${formatTokenCount(currentTokens)}/${formatTokenCount(modelContextLength)} (${percentage}%)`;
+          const cacheUsage = getCacheTokensFromUsage(history);
+          const cacheText = cacheUsage.total > 0
+            ? ` · cache r:${formatTokenCount(cacheUsage.cacheReadTokens)} c:${formatTokenCount(cacheUsage.cacheCreationTokens)}`
+            : '';
+          const tokenInfo = `[${config.provider}] ${modelDisplay}: ${formatTokenCount(currentTokens)}/${formatTokenCount(modelContextLength)} (${percentage}%)${cacheText}`;
           appStore.setTokenInfo(tokenInfo);
         }
 
