@@ -6,6 +6,7 @@
 
 import path from 'node:path';
 import fs from 'fs-extra';
+import { loadPromptWithVars } from '../services/promptLoader.js';
 
 /**
  * 规划模式状态
@@ -46,37 +47,15 @@ export class PlanModeManager {
     };
 
     // 创建初始计划文件
-    const initialContent = `# 实现计划
-
-## 任务描述
-${taskDescription}
-
-## 分析
-(在这里记录你的分析...)
-
-## 实现步骤
-1. (步骤1)
-2. (步骤2)
-...
-
-## 风险和注意事项
-- (风险1)
-- (风险2)
-`;
+    const initialContent = loadPromptWithVars('system/plan-mode-template.md', {
+      taskDescription,
+    });
 
     fs.writeFileSync(planFilePath, initialContent, 'utf-8');
 
-    return `已进入规划模式！
-
-**规划文件**: ${planFilePath}
-
-**你现在可以**:
-- 使用 read_file, glob, grep 等工具探索代码库
-- 在规划文件中记录你的分析和计划
-- 使用 write_file 或 edit_file 更新计划文件
-- 完成后使用 ExitPlanMode 工具提交计划
-
-**注意**: 规划模式下不应执行实际的代码修改，只做探索和规划。`;
+    return loadPromptWithVars('system/plan-mode-enter.md', {
+      planFilePath,
+    });
   }
 
   /**
@@ -118,13 +97,10 @@ ${taskDescription}
 
     return {
       success: true,
-      plan: `规划完成！(用时 ${elapsed.toFixed(1)}s)
-
-${planContent}
-
----
-
-请审阅上述计划。如果同意，我将开始实施。`,
+      plan: loadPromptWithVars('system/plan-mode-exit.md', {
+        elapsedSeconds: elapsed.toFixed(1),
+        planContent,
+      }),
     };
   }
 

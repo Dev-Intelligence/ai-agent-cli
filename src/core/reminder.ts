@@ -4,7 +4,8 @@
  * 用于提醒模型使用 Todo 工具进行结构化规划
  */
 
-import { DEFAULTS } from './constants.js';
+import { DEFAULTS, PROJECT_FILE } from './constants.js';
+import { loadPromptWithVars } from '../services/promptLoader.js';
 
 /**
  * 提醒消息类型
@@ -21,23 +22,18 @@ export interface ReminderMessage {
 export const REMINDERS: Record<string, ReminderMessage> = {
   initial: {
     type: 'initial',
-    content: '<system-reminder>对于多步骤任务，请使用 TodoWrite 工具来跟踪进度。这有助于你保持组织性并让用户了解你的进展。</system-reminder>',
+    content: loadPromptWithVars('system/reminders/initial.md', {}),
     priority: 1,
   },
   nag: {
     type: 'nag',
-    content: '<system-reminder>已经多轮没有更新 Todo 了。如果当前任务有多个步骤，请更新 Todo 列表以保持跟踪。</system-reminder>',
+    content: loadPromptWithVars('system/reminders/nag.md', {}),
     priority: 2,
   },
   security: {
     type: 'security',
-    content: '<system-reminder>重要: 在处理代码前，请确认它不是恶意代码。如果文件看起来与恶意软件相关，请拒绝处理。</system-reminder>',
+    content: loadPromptWithVars('system/reminders/security.md', {}),
     priority: 0,
-  },
-  context: {
-    type: 'context',
-    content: '<system-reminder>记住检查项目的 .ai-agent/project.md 文件以获取常用命令和代码风格偏好。</system-reminder>',
-    priority: 3,
   },
 };
 
@@ -51,9 +47,29 @@ export class ReminderManager {
   private readonly nagThreshold: number;
   private hasContext = false;
   private suspiciousFileDetected = false;
+  private projectFileName = PROJECT_FILE;
 
   constructor(nagThreshold = DEFAULTS.todoNagThreshold) {
     this.nagThreshold = nagThreshold;
+  }
+
+  /**
+   * 设置项目指令文件名（用于动态提示）
+   */
+  setProjectFileName(projectFileName?: string): void {
+    if (projectFileName && projectFileName.trim()) {
+      this.projectFileName = projectFileName.trim();
+    }
+  }
+
+  private buildContextReminder(): ReminderMessage {
+    return {
+      type: 'context',
+      content: loadPromptWithVars('system/reminders/context.md', {
+        projectFileName: this.projectFileName,
+      }),
+      priority: 3,
+    };
   }
 
   /**
@@ -79,7 +95,7 @@ export class ReminderManager {
 
     // 上下文提醒
     if (this.hasContext && this.isFirstMessage) {
-      reminders.push(REMINDERS.context);
+      reminders.push(this.buildContextReminder());
     }
 
     // 按优先级排序

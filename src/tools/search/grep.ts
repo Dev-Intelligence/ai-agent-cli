@@ -42,6 +42,17 @@ interface MatchResult {
   contextAfter?: string[];
 }
 
+function applyPagination<T>(items: T[], offset: number, headLimit: number): T[] {
+  let result = items;
+  if (offset > 0) {
+    result = result.slice(offset);
+  }
+  if (headLimit > 0) {
+    result = result.slice(0, headLimit);
+  }
+  return result;
+}
+
 /**
  * 文件类型到 glob 模式映射
  */
@@ -216,18 +227,6 @@ export async function runGrep(
       }
     }
 
-    // 应用分页（offset 和 headLimit）
-    function applyPagination<T>(items: T[]): T[] {
-      let result = items;
-      if (offset > 0) {
-        result = result.slice(offset);
-      }
-      if (headLimit > 0) {
-        result = result.slice(0, headLimit);
-      }
-      return result;
-    }
-
     // 根据输出模式格式化结果
     if (outputMode === 'files_with_matches') {
       if (filesWithMatches.size === 0) {
@@ -235,7 +234,7 @@ export async function runGrep(
       }
 
       let fileList = Array.from(filesWithMatches);
-      fileList = applyPagination(fileList);
+      fileList = applyPagination(fileList, offset, headLimit);
 
       let result = `找到 ${filesWithMatches.size} 个包含匹配的文件`;
       if (offset > 0 || headLimit > 0) {
@@ -251,7 +250,7 @@ export async function runGrep(
       }
 
       let entries = Array.from(fileCounts.entries());
-      entries = applyPagination(entries);
+      entries = applyPagination(entries, offset, headLimit);
 
       let result = `匹配统计:\n\n`;
       for (const [file, count] of entries) {
@@ -265,7 +264,7 @@ export async function runGrep(
         return `未找到匹配 "${pattern}" 的内容`;
       }
 
-      const paginatedMatches = applyPagination(matches);
+      const paginatedMatches = applyPagination(matches, offset, headLimit);
 
       let result = `找到 ${matches.length} 处匹配`;
       if (matches.length >= maxResults) {

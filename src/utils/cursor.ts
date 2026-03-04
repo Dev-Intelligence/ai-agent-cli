@@ -102,7 +102,7 @@ export class Cursor {
   }
 
   nextWord(): Cursor {
-    let nextCursor: Cursor = this;
+    let nextCursor: Cursor = new Cursor(this.measuredText, this.offset, this.selection);
     while (nextCursor.isOverWordChar() && !nextCursor.isAtEnd()) {
       nextCursor = nextCursor.right();
     }
@@ -113,7 +113,7 @@ export class Cursor {
   }
 
   prevWord(): Cursor {
-    let cursor: Cursor = this;
+    let cursor: Cursor = new Cursor(this.measuredText, this.offset, this.selection);
 
     if (!cursor.left().isOverWordChar()) {
       cursor = cursor.left();

@@ -6,6 +6,7 @@
 import fs from 'fs-extra';
 import path from 'node:path';
 import type { Skill, SkillResult } from '../types.js';
+import { loadPromptWithVars } from '../../services/promptLoader.js';
 import {
   loadCustomCommands,
   loadCustomCommandsSync,
@@ -372,11 +373,13 @@ export async function runSkillLegacy(
   if (!result.success) {
     return `错误: ${result.error}`;
   }
+  if (!result.prompt) {
+    return '错误: 技能未返回有效提示词。';
+  }
 
   // 返回格式化的技能内容
-  return `<skill-loaded name="${result.commandName}">
-${result.prompt}
-</skill-loaded>
-
-请按照上述技能中的指导完成用户的任务。`;
+  return loadPromptWithVars('tools/skill-legacy.md', {
+    commandName: result.commandName,
+    prompt: result.prompt,
+  });
 }

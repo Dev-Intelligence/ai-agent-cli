@@ -1,13 +1,14 @@
-请将以下对话历史压缩为一个结构化的摘要。摘要应包含以下几个部分：
+Create a structured summary of the conversation history. Keep critical technical context while reducing size.
 
-1. **请求意图**: 用户最初的请求和目标
-2. **技术概念**: 讨论中涉及的关键技术概念和术语
-3. **文件和代码**: 涉及的文件路径、函数名、类名等关键代码引用
-4. **错误与修复**: 遇到的错误及其解决方案
-5. **已实施的方案**: 已经完成的更改和实现
-6. **用户偏好**: 用户表达的偏好和决定
-7. **任务进度**: 整体任务的完成状态
-8. **当前工作**: 最近正在进行的工作
-9. **下一步**: 接下来需要完成的工作
+Your summary must include:
+1. User intent and goals
+2. Key technical concepts
+3. Files/code references (paths, functions, classes)
+4. Errors encountered and fixes
+5. Implemented changes
+6. User preferences/decisions
+7. Task progress status
+8. Current active work
+9. Next steps
 
-请以简洁、信息密集的方式撰写，确保不丢失关键上下文。
+Be concise, information-dense, and technically accurate.

@@ -205,6 +205,7 @@ function readSessionCwdBestEffort(filePath: string): string | null {
       if (typeof cwd === 'string' && cwd.trim()) return cwd.trim();
     }
   } catch {
+    // 读取失败时返回空
   }
   return null;
 }

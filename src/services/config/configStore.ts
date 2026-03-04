@@ -16,6 +16,7 @@ export interface UserConfig {
     model: string;
     baseUrl?: string;
     statusLine?: string | { command?: string };
+    projectFile?: string;
 }
 
 /**
@@ -90,7 +91,11 @@ export function removeUserConfig(): boolean {
  */
 export function getConfigSummary(config: UserConfig): string {
     const maskedKey = config.apiKey.slice(0, 8) + '...' + config.apiKey.slice(-4);
+    const extra = [
+        config.baseUrl ? `API URL: ${config.baseUrl}` : '',
+        config.projectFile ? `项目指令文件: ${config.projectFile}` : '',
+    ].filter(Boolean).join('\n');
     return `提供商: ${config.provider}
 模型: ${config.model}
-API Key: ${maskedKey}${config.baseUrl ? `\nAPI URL: ${config.baseUrl}` : ''}`;
+API Key: ${maskedKey}${extra ? `\n${extra}` : ''}`;
 }

@@ -135,7 +135,8 @@ async function main(): Promise<void> {
     const systemPrompt = createSystemPrompt(
       config.workdir,
       skillLoader.getDescriptions(),
-      getAgentDescriptions()
+      getAgentDescriptions(),
+      { projectFile: config.projectFile }
     );
 
     // 7. 初始化上下文压缩器
@@ -212,11 +213,12 @@ async function main(): Promise<void> {
 
     // 19. 获取 Reminder 管理器
     const reminderManager = getReminderManager();
+    reminderManager.setProjectFileName(config.projectFile);
 
     // 20. 对话历史
     const history: Message[] = [];
 
-    async function resumeSession(identifier?: string): Promise<string | void> {
+    const resumeSession = async (identifier?: string): Promise<string | void> => {
       const cwd = config.workdir;
 
       if (identifier) {
@@ -292,7 +294,7 @@ async function main(): Promise<void> {
         appStore.setTokenInfo(tokenInfo);
       }
       return `已恢复会话: ${selected.sessionId}`;
-    }
+    };
 
     // 21. 创建命令上下文
     const cmdContext: SlashCommandContext = {
@@ -322,7 +324,7 @@ async function main(): Promise<void> {
     const pendingUserInputs: string[] = [];
     let isDrainingQueue = false;
 
-    async function processSingleInput(text: string): Promise<void> {
+    const processSingleInput = async (text: string): Promise<void> => {
       try {
         // 检查退出命令
         if (!text || ['exit', 'quit', 'q'].includes(text.toLowerCase())) {
@@ -503,9 +505,9 @@ async function main(): Promise<void> {
         // 确保回到输入阶段
         inkController.goToInput();
       }
-    }
+    };
 
-    async function drainQueuedInputs(): Promise<void> {
+    const drainQueuedInputs = async (): Promise<void> => {
       if (isDrainingQueue) return;
       isDrainingQueue = true;
       try {
@@ -519,9 +521,9 @@ async function main(): Promise<void> {
           void drainQueuedInputs();
         }
       }
-    }
+    };
 
-    async function handleUserInput(text: string): Promise<void> {
+    const handleUserInput = async (text: string): Promise<void> => {
       // 空输入直接忽略
       if (!text) return;
 
@@ -533,18 +535,18 @@ async function main(): Promise<void> {
 
       pendingUserInputs.push(text);
       void drainQueuedInputs();
-    }
+    };
 
     // 23. 退出处理（Ctrl+D 触发）
-    function handleExit(): void {
+    const handleExit = (): void => {
       if (hookManager.hasHooksFor('SessionEnd')) {
         hookManager.emit('SessionEnd', { workdir: config.workdir, sessionId: getSessionId() }).catch(() => {});
       }
       mcpRegistry.disconnectAll();
-    }
+    };
 
     // 24. 中断处理（ESC / Ctrl+C）
-    function handleInterrupt(): void {
+    const handleInterrupt = (): void => {
       if (rootAbort && !rootAbort.signal.aborted) {
         // AI 生成中：级联中断所有子代理
         rootAbort.abort();
@@ -553,7 +555,7 @@ async function main(): Promise<void> {
       }
       // 空闲状态：退出 Ink 应用
       unmountInk?.();
-    }
+    };
 
     // 24. 拦截 console 输出到 TUI（在 render 前启用）
     restoreConsole = patchConsole(appStore);

@@ -102,7 +102,7 @@ export async function* agentLoopGenerator(
     agentId,
   } = options;
 
-  let currentHistory = [...history];
+  const currentHistory = [...history];
   let turns = 0;
   let totalToolCount = 0;
   const startTime = Date.now();

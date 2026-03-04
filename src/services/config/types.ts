@@ -8,6 +8,7 @@ import type { Provider } from '../../core/types.js';
 // 环境变量 schema
 export const EnvSchema = z.object({
   PROVIDER: z.enum(['anthropic', 'openai', 'gemini']).default('anthropic'),
+  AI_AGENT_PROJECT_FILE: z.string().optional(),
 
   // Anthropic
   ANTHROPIC_API_KEY: z.string().optional(),
@@ -34,6 +35,7 @@ export interface Config {
   baseUrl?: string;
   workdir: string;
   skillsDir: string;
+  projectFile: string;
 }
 
 // 配置选项接口
@@ -44,6 +46,7 @@ export interface ConfigOptions {
   baseUrl?: string;
   workdir?: string;
   skillsDir?: string;
+  projectFile?: string;
 }
 
 // 默认模型名称

@@ -6,7 +6,9 @@
  * 去除 ANSI 颜色码
  */
 export function stripAnsi(str: string): string {
-  return str.replace(/\x1b\[[0-9;]*m/g, '');
+  const esc = String.fromCharCode(27);
+  const pattern = new RegExp(`${esc}\\[[0-9;]*m`, 'g');
+  return str.replace(pattern, '');
 }
 
 /**

@@ -142,6 +142,7 @@ export class JsonRpcPeer {
       try {
         await handler(params);
       } catch {
+        // 通知类型请求失败时忽略错误
       }
       return null;
     }

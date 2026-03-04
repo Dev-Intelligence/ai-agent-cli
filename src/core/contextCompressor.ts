@@ -100,7 +100,7 @@ export class ContextCompressor {
     // 构建新的历史
     const summaryMessage: Message = {
       role: 'user',
-      content: `[上下文摘要]\n\n以下是之前对话的压缩摘要：\n\n${summary}\n\n---\n请基于以上上下文继续对话。`,
+      content: loadPromptWithVars('compression/summary-wrap.md', { summary }),
       uuid: generateUuid(),
     };
 

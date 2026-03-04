@@ -39,6 +39,8 @@ export function getBackgroundAgentTaskSnapshot(
   const task = backgroundTasks.get(agentId);
   if (!task) return undefined;
   const { abortController: _abortController, done: _done, ...snapshot } = task;
+  void _abortController;
+  void _done;
   return snapshot;
 }
 
@@ -55,6 +57,8 @@ export function markBackgroundAgentTaskRetrieved(agentId: string): void {
 export function listBackgroundAgentTasks(): BackgroundAgentTask[] {
   return Array.from(backgroundTasks.values()).map(task => {
     const { abortController: _abortController, done: _done, ...snapshot } = task;
+    void _abortController;
+    void _done;
     return snapshot;
   });
 }

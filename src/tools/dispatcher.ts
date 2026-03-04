@@ -26,6 +26,7 @@ import { isMCPTool } from '../services/mcp/registry.js';
 import type { MCPRegistry } from '../services/mcp/registry.js';
 import { runListMcpResources, runReadMcpResource } from './mcp/mcpTools.js';
 import type { HierarchicalAbortController } from '../core/abort.js';
+import { loadPromptWithVars } from '../services/promptLoader.js';
 
 /**
  * 工具执行器配置
@@ -57,8 +58,8 @@ export function createExecuteTool(config: ToolExecutorConfig): ExecuteToolFunc {
       let result: string | ToolExecutionResult;
       switch (toolName) {
         case 'bash': {
-          // explore 代理使用只读模式
-          const readOnly = agentType === 'explore';
+          // Explore 代理使用只读模式
+          const readOnly = String(agentType || '').toLowerCase() === 'explore';
           const bashOptions: BashOptions = {
             runInBackground: input.run_in_background as boolean | undefined,
             timeout: input.timeout as number | undefined,
@@ -127,7 +128,7 @@ export function createExecuteTool(config: ToolExecutorConfig): ExecuteToolFunc {
             );
             if (!output) {
               result = {
-                content: 'User declined to answer questions.',
+                content: loadPromptWithVars('tools/ask-user-declined.md', {}),
                 uiContent: '用户取消回答问题。',
                 isError: true,
               };
@@ -136,9 +137,9 @@ export function createExecuteTool(config: ToolExecutorConfig): ExecuteToolFunc {
             const formatted = Object.entries(output.answers)
               .map(([question, answer]) => `"${question}"="${answer}"`)
               .join(', ');
-            const assistantText =
-              `User has answered your questions: ${formatted}. ` +
-              'You can now continue with the user\'s answers in mind.';
+            const assistantText = loadPromptWithVars('tools/ask-user-answers.md', {
+              formatted,
+            });
 
             const uiLines = [
               '用户已回答以下问题:',

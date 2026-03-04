@@ -5,7 +5,7 @@
 
 import fs from 'fs-extra';
 import path from 'node:path';
-import { PROJECT_FILE } from './constants.js';
+import { PROJECT_FILE, PRODUCT_NAME } from './constants.js';
 
 /**
  * 项目上下文接口
@@ -40,9 +40,9 @@ export class ProjectContextManager {
   private projectFilePath: string;
   private context: ProjectContext | null = null;
 
-  constructor(workdir: string) {
+  constructor(workdir: string, projectFile: string = PROJECT_FILE) {
     this.workdir = workdir;
-    this.projectFilePath = path.join(workdir, PROJECT_FILE);
+    this.projectFilePath = path.join(workdir, projectFile);
   }
 
   /**
@@ -153,7 +153,9 @@ export class ProjectContextManager {
    * 创建初始项目文件
    */
   createInitialFile(): void {
-    const initialContent = `# ${path.basename(this.workdir)} 项目配置
+    const initialContent = `# ${path.basename(this.workdir)} 项目指令（${path.basename(this.projectFilePath)}）
+
+以下内容会作为项目指令注入到系统提示词中，用于约束 ${PRODUCT_NAME} 的行为。
 
 ## 常用命令
 
@@ -218,9 +220,9 @@ export class ProjectContextManager {
  */
 let projectContextInstance: ProjectContextManager | null = null;
 
-export function getProjectContextManager(workdir?: string): ProjectContextManager {
+export function getProjectContextManager(workdir?: string, projectFile?: string): ProjectContextManager {
   if (!projectContextInstance && workdir) {
-    projectContextInstance = new ProjectContextManager(workdir);
+    projectContextInstance = new ProjectContextManager(workdir, projectFile);
   }
   if (!projectContextInstance) {
     throw new Error('ProjectContextManager 未初始化');

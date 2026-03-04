@@ -26,7 +26,7 @@ export const PRODUCT_VERSION = VERSION;
 /**
  * 项目配置文件名
  */
-export const PROJECT_FILE = '.ai-agent/project.md';
+export const PROJECT_FILE = 'AI-AGENTS.md';
 
 /**
  * 项目设置目录

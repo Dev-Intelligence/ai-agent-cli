@@ -10,7 +10,7 @@ import { homedir } from 'node:os';
  * 危险命令模式列表
  */
 const DANGEROUS_PATTERNS = [
-  /rm\s+-rf\s+[\/~]/i, // rm -rf / 或 rm -rf ~
+  /rm\s+-rf\s+[/~]/i, // rm -rf / 或 rm -rf ~
   /rm\s+-rf\s+\*/i, // rm -rf *
   />\s*\/dev\/sd[a-z]/i, // 写入磁盘设备
   /mkfs\./i, // 格式化命令
@@ -22,7 +22,7 @@ const DANGEROUS_PATTERNS = [
 ];
 
 /**
- * 只读命令白名单（用于 explore 代理）
+ * 只读命令白名单（用于 Explore 代理）
  */
 const READ_ONLY_COMMANDS = [
   'ls',
@@ -101,7 +101,7 @@ export function validateBashCommand(command: string): void {
 }
 
 /**
- * 验证只读命令（用于 explore 代理）
+ * 验证只读命令（用于 Explore 代理）
  */
 export function validateReadOnlyCommand(command: string): void {
   // 提取命令的第一个词
@@ -149,5 +149,13 @@ export function isSafeFileExtension(filePath: string): boolean {
  */
 export function sanitizeInput(input: string): string {
   // 移除控制字符
-  return input.replace(/[\x00-\x1F\x7F]/g, '');
+  let cleaned = '';
+  for (let i = 0; i < input.length; i++) {
+    const code = input.charCodeAt(i);
+    if ((code >= 0x00 && code <= 0x1f) || code === 0x7f) {
+      continue;
+    }
+    cleaned += input[i]!;
+  }
+  return cleaned;
 }

@@ -23,7 +23,7 @@ export interface BashOptions {
  * 执行 bash 命令
  * @param workdir 工作目录
  * @param command 要执行的命令
- * @param readOnly 是否为只读模式（用于 explore 代理）
+ * @param readOnly 是否为只读模式（用于 Explore 代理）
  * @param options 额外选项（后台执行、超时等）
  */
 export async function runBash(

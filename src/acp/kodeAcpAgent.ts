@@ -23,6 +23,8 @@ import { MCPRegistry } from '../services/mcp/registry.js';
 import type { MCPServerConfig } from '../services/mcp/types.js';
 import { getSessionProjectDir } from '../services/session/sessionLog.js';
 import { HierarchicalAbortController } from '../core/abort.js';
+import { PRODUCT_NAME, PRODUCT_COMMAND, VERSION } from '../core/constants.js';
+import { getReminderManager } from '../core/reminder.js';
 import type { AcpMcpWrappedClient } from './mcpClients.js';
 import { buildAcpToolDefinitions, connectAcpMcpServers, listAcpResources } from './mcpClients.js';
 
@@ -205,6 +207,7 @@ function persistAcpSessionToDisk(session: SessionState): void {
     };
     writeFileSync(getAcpSessionPath(session.cwd, session.sessionId), JSON.stringify(payload, null, 2), 'utf8');
   } catch {
+    // 会话持久化失败时忽略
   }
 }
 
@@ -368,9 +371,9 @@ export class KodeAcpAgent {
         },
       },
       agentInfo: {
-        name: 'ai-agent-cli',
-        title: 'AI Agent CLI',
-        version: '1.0.0',
+        name: PRODUCT_COMMAND,
+        title: PRODUCT_NAME,
+        version: VERSION,
       },
       authMethods: [],
     };
@@ -398,9 +401,15 @@ export class KodeAcpAgent {
     setSessionId(sessionId);
 
     const config = new Config(userConfig);
+    getReminderManager().setProjectFileName(config.projectFile);
     const adapter = await createAdapter(config.provider, config.apiKey, config.model, config.baseUrl);
     const skillLoader = getSkillLoader(config.skillsDir);
-    const systemPrompt = createSystemPrompt(cwd, skillLoader.getDescriptions(), getAgentDescriptions());
+    const systemPrompt = createSystemPrompt(
+      cwd,
+      skillLoader.getDescriptions(),
+      getAgentDescriptions(),
+      { projectFile: config.projectFile }
+    );
 
     const mcpRegistry = new MCPRegistry(cwd);
     await mcpRegistry.loadConfig();

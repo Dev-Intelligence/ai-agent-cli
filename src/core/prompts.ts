@@ -4,8 +4,11 @@
 
 import { getAgentTypeDescriptions, getAgentByType } from './agents.js';
 import type { AgentType } from './types.js';
-import { PROJECT_FILE, PRODUCT_NAME } from './constants.js';
+import { PROJECT_FILE, PRODUCT_NAME, PROJECT_DIR } from './constants.js';
 import { loadPromptWithVars } from '../services/promptLoader.js';
+import { getSessionId } from '../services/session/sessionId.js';
+import fs from 'fs-extra';
+import path from 'node:path';
 import {
   getCurrentOutputStyle as getCurrentOutputStyleFromRegistry,
   getOutputStylePrompt,
@@ -33,12 +36,37 @@ Node版本: ${process.version}
 </env>`;
 }
 
-function getSystemPromptSections(workdir: string): string[] {
+function getScratchpadDir(workdir: string): string {
+  const sessionId = getSessionId();
+  return path.join(workdir, PROJECT_DIR, 'scratchpad', sessionId);
+}
+
+function getScratchpadInfo(workdir: string): string {
+  const scratchpadDir = getScratchpadDir(workdir);
+  return loadPromptWithVars('system/scratchpad.md', { scratchpadDir });
+}
+
+function loadClaudeInstructions(workdir: string, projectFile: string): string | null {
+  const filePath = path.join(workdir, projectFile);
+  if (!fs.existsSync(filePath)) return null;
+  try {
+    const content = fs.readFileSync(filePath, 'utf8').trim();
+    if (!content) return null;
+    const header = loadPromptWithVars('system/claude-instructions-header.md', {});
+    return `${header}\n\n${content}`;
+  } catch {
+    return null;
+  }
+}
+
+function getSystemPromptSections(workdir: string, projectFile: string): string[] {
+  const claudeInstructions = loadClaudeInstructions(workdir, projectFile);
   return [
     loadPromptWithVars('system/identity.md', { productName: PRODUCT_NAME }),
+    ...(claudeInstructions ? [claudeInstructions] : []),
     loadPromptWithVars('system/security.md', {}),
     loadPromptWithVars('system/task-management.md', {}),
-    loadPromptWithVars('system/memory.md', { projectFile: PROJECT_FILE }),
+    loadPromptWithVars('system/memory.md', { projectFile }),
     ...(getCurrentOutputStyle() === 'default'
       ? [loadPromptWithVars('system/tone-default.md', {})]
       : []),
@@ -48,6 +76,7 @@ function getSystemPromptSections(workdir: string): string[] {
       ? [loadPromptWithVars('system/workflow.md', {})]
       : []),
     loadPromptWithVars('system/tool-usage.md', {}),
+    getScratchpadInfo(workdir),
     getEnvInfo(workdir),
   ];
 }
@@ -58,10 +87,12 @@ function getSystemPromptSections(workdir: string): string[] {
 export function createSystemPrompt(
   workdir: string,
   skillDescriptions: string,
-  agentDescriptions: string
+  agentDescriptions: string,
+  options?: { projectFile?: string }
 ): string {
+  const projectFile = options?.projectFile || PROJECT_FILE;
   const sections = [
-    ...getSystemPromptSections(workdir),
+    ...getSystemPromptSections(workdir, projectFile),
     `## 可用技能\n\n${skillDescriptions}`,
     `## 子代理类型\n\n${agentDescriptions}`,
   ];
@@ -70,9 +101,7 @@ export function createSystemPrompt(
   if (outputStylePrompt) {
     sections.push(outputStylePrompt);
   }
-
-  // 与旧行为保持一致：末尾再次强化安全约束
-  sections.push(loadPromptWithVars('system/security.md', {}));
+  sections.push(loadPromptWithVars('system/claude-notes.md', {}));
 
   return sections.filter(Boolean).join('\n\n');
 }
@@ -82,8 +111,8 @@ export function createSystemPrompt(
  */
 export function getAgentBasePrompt(workdir: string): string {
   return [
-    `${PRODUCT_NAME} 子代理模式：根据任务要求使用可用工具完成目标。`,
-    '回答应直接、简洁，不要写无关的说明或前后缀。',
+    loadPromptWithVars('system/identity-subagent.md', { productName: PRODUCT_NAME }),
+    loadPromptWithVars('system/subagent-response.md', {}),
     getEnvInfo(workdir),
   ].join('\n\n');
 }

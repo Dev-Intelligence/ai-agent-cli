@@ -110,6 +110,7 @@ function safeAppendJsonl(path: string, record: unknown): void {
     safeEnsureFile(path);
     appendFileSync(path, JSON.stringify(record) + '\n', 'utf8');
   } catch {
+    // 写入失败时忽略
   }
 }
 
@@ -214,6 +215,7 @@ function ensureFileHistorySnapshot(
       return;
     }
   } catch {
+    // 读取/写入失败时继续走后续快照逻辑
   }
 
   const now = new Date().toISOString();

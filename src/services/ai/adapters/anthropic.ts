@@ -19,7 +19,8 @@ type AnthropicMessageParam = {
 
 function stripCacheControl(block: Record<string, unknown>): Record<string, unknown> {
   if (block.type !== 'text') return block;
-  const { cache_control, ...rest } = block as Record<string, unknown> & { cache_control?: CacheControl };
+  const { cache_control: _cacheControl, ...rest } = block as Record<string, unknown> & { cache_control?: CacheControl };
+  void _cacheControl;
   return rest;
 }
 

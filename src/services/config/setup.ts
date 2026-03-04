@@ -5,6 +5,7 @@
 import enquirer from 'enquirer';
 import chalk from 'chalk';
 import type { Provider } from '../../core/types.js';
+import { PRODUCT_NAME } from '../../core/constants.js';
 import { DEFAULT_ENDPOINTS } from './types.js';
 import { saveUserConfig, getConfigPath, type UserConfig } from './configStore.js';
 
@@ -48,7 +49,7 @@ const MODEL_CHOICES: Record<Provider, Array<{ name: string; message: string; hin
  */
 function printWelcome(): void {
     console.log();
-    console.log(chalk.cyan.bold('🤖 欢迎使用 AI Agent CLI!'));
+    console.log(chalk.cyan.bold(`🤖 欢迎使用 ${PRODUCT_NAME}!`));
     console.log();
     console.log(chalk.yellow('检测到您尚未配置 API 密钥，请完成初始设置：'));
     console.log();
@@ -167,7 +168,7 @@ export async function runSetupWizard(): Promise<UserConfig | null> {
  */
 export async function runReconfigureWizard(): Promise<UserConfig | null> {
     console.log();
-    console.log(chalk.cyan.bold('🔧 重新配置 AI Agent CLI'));
+    console.log(chalk.cyan.bold(`🔧 重新配置 ${PRODUCT_NAME}`));
     console.log();
 
     return runSetupWizard();

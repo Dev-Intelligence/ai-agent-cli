@@ -5,6 +5,7 @@
 
 import * as readline from 'readline';
 import type { ToolExecutionResult } from '../../core/types.js';
+import { loadPromptWithVars } from '../../services/promptLoader.js';
 
 /**
  * 问题选项
@@ -117,9 +118,9 @@ export async function runAskUserQuestion(questions: Question[]): Promise<string 
     const formatted = Object.entries(flatAnswers)
       .map(([question, answer]) => `"${question}"="${answer}"`)
       .join(', ');
-    const assistantText =
-      `User has answered your questions: ${formatted}. ` +
-      'You can now continue with the user\'s answers in mind.';
+    const assistantText = loadPromptWithVars('tools/ask-user-answers.md', {
+      formatted,
+    });
 
     const uiLines = [
       '用户已回答以下问题:',

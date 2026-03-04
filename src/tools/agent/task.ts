@@ -16,6 +16,7 @@ import { upsertBackgroundAgentTask } from '../../services/session/backgroundAgen
 import { getSessionLogFilePath } from '../../services/session/sessionLog.js';
 import { getSessionId } from '../../services/session/sessionId.js';
 import { existsSync, readFileSync } from 'node:fs';
+import { loadPromptWithVars } from '../../services/promptLoader.js';
 
 /**
  * 子代理任务选项
@@ -31,14 +32,7 @@ export interface TaskOptions {
 
 type TaskResultStatus = 'async_launched' | 'completed';
 
-const FORK_CONTEXT_TOOL_RESULT_TEXT = `### FORKING CONVERSATION CONTEXT ###
-### ENTERING SUB-AGENT ROUTINE ###
-Entered sub-agent context
-
-PLEASE NOTE: 
-- The messages above this point are from the main thread prior to sub-agent execution. They are provided as context only.
-- Context messages may include tool_use blocks for tools that are not available in the sub-agent context. You should only use the tools specifically provided to you in the system prompt.
-- Only complete the specific sub-agent task you have been assigned below.`;
+const FORK_CONTEXT_TOOL_RESULT_TEXT = loadPromptWithVars('tools/task-fork-context.md', {});
 
 function createUserMessage(content: string | ContentBlock[]): Message {
   return {
@@ -173,11 +167,10 @@ function extractLastAssistantText(history: Message[]): string {
 
 function asyncLaunchMessage(agentId: string): string {
   const toolName = 'TaskOutput';
-  return `Async agent launched successfully.
-agentId: ${agentId} (This is an internal ID for your use, do not mention it to the user. Use this ID to retrieve results with ${toolName} when the agent finishes). 
-The agent is currently working in the background. If you have other tasks you you should continue working on them now. Wait to call ${toolName} until either:
-- If you want to check on the agent's progress - call ${toolName} with block=false to get an immediate update on the agent's status
-- If you run out of things to do and the agent is still running - call ${toolName} with block=true to idle and wait for the agent's result (do not use block=true unless you completely run out of things to do as it will waste time).`;
+  return loadPromptWithVars('tools/task-async-launch.md', {
+    agentId,
+    toolName,
+  });
 }
 
 function buildUiContent(status: TaskResultStatus, output: {

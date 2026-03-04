@@ -8,11 +8,12 @@ import { homedir } from 'node:os';
 import matter from 'gray-matter';
 import type { AgentType } from './types.js';
 import { loadPromptWithVars } from '../services/promptLoader.js';
+import { PRODUCT_NAME } from './constants.js';
 import { getConfigDir } from '../services/config/configStore.js';
 
 export type AgentSource = 'built-in' | 'userSettings' | 'projectSettings';
 export type AgentLocation = 'built-in' | 'user' | 'project';
-export type AgentModel = 'inherit' | (string & {});
+export type AgentModel = 'inherit' | (string & NonNullable<unknown>);
 export type AgentPermissionMode =
   | 'default'
   | 'acceptEdits'
@@ -42,55 +43,47 @@ export interface AgentConfig {
 
 const BUILTIN_AGENTS: AgentConfig[] = [
   {
-    agentType: 'explore',
-    whenToUse: '只读探索代理，用于搜索和分析代码库',
+    agentType: 'Explore',
+    whenToUse: '只读探索代理，用于快速搜索与分析代码库',
     tools: ['bash', 'read_file', 'Glob', 'Grep'],
-    systemPrompt: loadPromptWithVars('agent/explore.md', {}),
+    systemPrompt: loadPromptWithVars('agent/explore.md', { productName: PRODUCT_NAME }),
     source: 'built-in',
     location: 'built-in',
     baseDir: 'built-in',
   },
   {
-    agentType: 'code',
-    whenToUse: '实现功能或修复 bug 的全权限代理',
-    tools: '*',
-    systemPrompt: loadPromptWithVars('agent/code.md', {}),
-    source: 'built-in',
-    location: 'built-in',
-    baseDir: 'built-in',
-  },
-  {
-    agentType: 'plan',
-    whenToUse: '规划代理，用于设计实施策略',
+    agentType: 'Plan',
+    whenToUse: '只读规划代理，用于设计实施策略',
     tools: ['bash', 'read_file', 'Glob', 'Grep'],
-    systemPrompt: loadPromptWithVars('agent/plan.md', {}),
+    systemPrompt: loadPromptWithVars('agent/plan.md', { productName: PRODUCT_NAME }),
     source: 'built-in',
     location: 'built-in',
     baseDir: 'built-in',
   },
   {
-    agentType: 'bash',
-    whenToUse: '仅执行 bash 命令的代理',
+    agentType: 'Bash',
+    whenToUse: '命令执行专家，专注 bash 操作',
     tools: ['bash', 'read_file'],
-    systemPrompt: loadPromptWithVars('agent/bash.md', {}),
+    systemPrompt: loadPromptWithVars('agent/bash.md', { productName: PRODUCT_NAME }),
     source: 'built-in',
     location: 'built-in',
     baseDir: 'built-in',
   },
   {
-    agentType: 'guide',
-    whenToUse: '查找文档与指南的代理',
+    agentType: 'Guide',
+    whenToUse: '文档引导代理，负责项目功能与配置说明',
     tools: ['read_file', 'Glob', 'Grep'],
-    systemPrompt: loadPromptWithVars('agent/guide.md', {}),
+    systemPrompt: loadPromptWithVars('agent/guide.md', { productName: PRODUCT_NAME }),
+    permissionMode: 'dontAsk',
     source: 'built-in',
     location: 'built-in',
     baseDir: 'built-in',
   },
   {
-    agentType: 'general',
-    whenToUse: '通用代理，适合复杂综合任务',
+    agentType: 'general-purpose',
+    whenToUse: '通用代理，适合复杂综合任务与多步骤执行',
     tools: '*',
-    systemPrompt: loadPromptWithVars('agent/general.md', {}),
+    systemPrompt: loadPromptWithVars('agent/general.md', { productName: PRODUCT_NAME }),
     source: 'built-in',
     location: 'built-in',
     baseDir: 'built-in',

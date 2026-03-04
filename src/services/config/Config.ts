@@ -6,6 +6,7 @@ import { config as dotenvConfig } from 'dotenv';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Provider } from '../../core/types.js';
+import { PROJECT_FILE } from '../../core/constants.js';
 import { EnvSchema, DEFAULT_MODELS, DEFAULT_ENDPOINTS } from './types.js';
 import type { Config as IConfig } from './types.js';
 import { loadUserConfig, type UserConfig } from './configStore.js';
@@ -29,6 +30,7 @@ export class Config implements IConfig {
   baseUrl?: string;
   workdir: string;
   skillsDir: string;
+  projectFile: string;
 
   constructor(userConfig?: UserConfig | null) {
     // 设置工作目录（支持环境变量覆盖）
@@ -43,6 +45,7 @@ export class Config implements IConfig {
       this.apiKey = process.env.AI_AGENT_API_KEY || userConfig.apiKey;
       this.model = process.env.AI_AGENT_MODEL || userConfig.model;
       this.baseUrl = process.env.AI_AGENT_BASE_URL || userConfig.baseUrl;
+      this.projectFile = process.env.AI_AGENT_PROJECT_FILE || userConfig.projectFile || PROJECT_FILE;
       return;
     }
 
@@ -53,6 +56,7 @@ export class Config implements IConfig {
       this.apiKey = savedConfig.apiKey;
       this.model = savedConfig.model;
       this.baseUrl = savedConfig.baseUrl;
+      this.projectFile = process.env.AI_AGENT_PROJECT_FILE || savedConfig.projectFile || PROJECT_FILE;
       return;
     }
 
@@ -64,6 +68,7 @@ export class Config implements IConfig {
 
     // 设置提供商
     this.provider = env.PROVIDER;
+    this.projectFile = env.AI_AGENT_PROJECT_FILE || PROJECT_FILE;
 
     // 根据提供商获取配置
     switch (this.provider) {

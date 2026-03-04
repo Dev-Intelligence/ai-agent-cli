@@ -42,16 +42,15 @@
 #### MCP 扩展
 - **ListMcpResources / ReadMcpResource** - Model Context Protocol 动态工具和资源
 
-### 6 种子代理系统
+### 5 种子代理系统
 
 | 代理类型 | 用途 | 工具权限 |
 |---------|------|---------|
-| **explore** | 只读代码库分析 | bash、read_file、Glob、Grep |
-| **code** | 完整代码实现 | 全部工具 |
-| **plan** | 架构设计与方案规划 | bash、read_file、Glob、Grep |
-| **bash** | Shell 命令执行 | bash、read_file |
-| **guide** | 文档查询指南 | read_file、Glob、Grep |
-| **general** | 通用多步骤任务 | 全部工具 |
+| **Explore** | 只读代码库分析 | bash、read_file、Glob、Grep |
+| **Plan** | 架构设计与方案规划 | bash、read_file、Glob、Grep |
+| **Bash** | Shell 命令执行 | bash、read_file |
+| **Guide** | 文档查询指南 | read_file、Glob、Grep |
+| **general-purpose** | 通用多步骤任务 | 全部工具 |
 
 ### 技能系统
 
@@ -101,7 +100,7 @@ model: sonnet
 
 - **权限管理** - 支持 ask / acceptEdits / bypassPermissions / plan 等模式
 - **敏感文件保护** - 自动拦截 `.env`、`*.key`、`credentials` 等
-- **只读模式** - explore 代理仅允许读操作
+- **只读模式** - Explore 代理仅允许读操作
 - **危险命令拦截** - 拦截 `rm -rf /` 等破坏性命令
 - **路径沙箱** - 限制文件操作范围
 
@@ -134,7 +133,7 @@ ai-agent-cli/
 │   │   ├── loopGenerator.ts      # async Generator 事件驱动架构
 │   │   ├── agentEvent.ts         # Agent 事件类型
 │   │   ├── agentSession.ts       # Agent 会话管理
-│   │   ├── agents.ts             # 6 种子代理配置
+│   │   ├── agents.ts             # 5 种子代理配置
 │   │   ├── prompts.ts            # 模块化系统提示词
 │   │   ├── permissions.ts        # 权限管理系统
 │   │   ├── hooks.ts              # Hook 管理器
@@ -306,7 +305,7 @@ ai-agent-cli   # 或简写 aac
 ### 使用子代理
 
 ```
->>> 使用 explore 代理分析项目架构
+>>> 使用 Explore 代理分析项目架构
 ```
 
 ### 规划模式

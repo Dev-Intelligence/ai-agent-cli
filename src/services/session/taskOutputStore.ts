@@ -43,6 +43,7 @@ export function appendTaskOutput(taskId: string, chunk: string, cwd: string = pr
     ensureTaskOutputsDirExists(cwd);
     appendFileSync(getTaskOutputFilePath(taskId, cwd), chunk, 'utf8');
   } catch {
+    // 追加失败时忽略
   }
 }
 

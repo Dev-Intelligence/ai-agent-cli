@@ -8,6 +8,10 @@
 ```text
 src/prompts/
   system/        # 主系统提示词片段（createSystemPrompt）
+    - identity.md / identity-subagent.md 等身份定义
+    - claude-instructions-header.md / claude-notes.md（Claude 结构对齐）
+    - scratchpad.md / subagent-response.md（Scratchpad 与子代理基础约束）
+    - plan-mode-*.md / reminders/*.md（规划模式与系统提醒）
   agent/         # 子代理角色提示词（AGENT_TYPES）
   styles/        # 输出风格提示词（explanatory / learning）
   compression/   # 上下文压缩摘要提示词
@@ -42,7 +46,10 @@ loadPromptWithVars('system/identity.md', { productName: PRODUCT_NAME })
 
 ### system/
 - 使用位置：`src/core/prompts.ts`
+- 使用位置：`src/core/planMode.ts`
+- 使用位置：`src/core/reminder.ts`
 - 作用：组装 `createSystemPrompt()` 和 `createSubagentSystemPrompt()`
+  - 包含 Scratchpad / 子代理基础约束 / 规划模式模板 / 提醒模板
 
 ### agent/
 - 使用位置：`src/core/agents.ts`
@@ -55,6 +62,7 @@ loadPromptWithVars('system/identity.md', { productName: PRODUCT_NAME })
 ### compression/
 - 使用位置：`src/core/contextCompressor.ts`
 - 作用：上下文压缩摘要生成提示词
+  - summary-wrap.md 用于包装摘要内容
 
 ### safety/
 - 使用位置：`src/core/commandPrefix.ts`
@@ -62,7 +70,11 @@ loadPromptWithVars('system/identity.md', { productName: PRODUCT_NAME })
 
 ### tools/
 - 使用位置：`src/tools/network/webFetch.ts`
-- 作用：网页内容提取提示词
+- 使用位置：`src/tools/interaction/askQuestion.ts`
+- 使用位置：`src/tools/dispatcher.ts`
+- 使用位置：`src/tools/agent/task.ts`
+- 使用位置：`src/tools/ai/skill.ts`
+- 作用：网页内容提取、问答结果、子代理任务、技能兼容输出等提示词
 
 ## 维护规范
 

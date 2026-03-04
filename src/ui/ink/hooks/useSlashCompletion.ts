@@ -44,7 +44,7 @@ const INITIAL_STATE: CompletionState = {
 };
 
 function shouldHandleTabKey(key: Key): boolean {
-  return Boolean(key.tab) && !Boolean(key.shift);
+  return key.tab && !key.shift;
 }
 
 export function useSlashCompletion({

@@ -1,8 +1,8 @@
-以下是从 {{url}} 获取的网页内容。请根据用户的要求提取信息。
+The following content was fetched from {{url}}.
 
-用户要求: {{prompt}}
+User request: {{prompt}}
 
-网页内容:
+Web content:
 {{content}}
 
-请直接回答用户的问题，不要重复网页内容。
+Return only the requested information. Do not repeat irrelevant page text.
