@@ -54,16 +54,18 @@ export const READ_FILE_TOOL: ToolDefinition = {
   description: `读取文件内容。
 
 功能:
-- 读取任何文本文件
-- 可选择限制读取行数和起始偏移
-- 超大文件会拒绝输出，需要配合 offset/limit
-- 自动检测文件编码
+- 读取文本文件
+- 默认从开头读取最多 2000 行
+- 可用 offset/limit 控制行范围
+- 行长度超过 2000 字符会被截断
+- 输出使用 cat -n 风格（空格 + 行号 + Tab）
+- 支持读取图片与 PDF（以多模态内容返回）
 
 使用建议:
 - file_path 必须是绝对路径
-- 编辑文件前先读取以了解内容
-- 批量读取多个相关文件以获取上下文
-- 对于大文件，使用 offset + limit 分段读取`,
+- 推荐直接读取完整文件（不传 offset/limit）
+- 对于大文件，使用 offset + limit 分段读取
+- 编辑文件前先读取以了解内容`,
   input_schema: {
     type: 'object',
     properties: {
@@ -92,8 +94,7 @@ export const WRITE_FILE_TOOL: ToolDefinition = {
 功能:
 - 创建新文件或完全覆盖现有文件
 - 自动创建父目录
-- 支持任何文本内容
-- 敏感文件（.env、*.key 等）受保护
+- 返回结构化结果（type/filePath/content/structuredPatch/originalFile/gitDiff）
 
 使用建议:
 - file_path 必须是绝对路径
@@ -126,12 +127,13 @@ export const EDIT_FILE_TOOL: ToolDefinition = {
 - 保持文件其他部分不变
 - 支持多行文本替换
 - 支持 replace_all 模式替换所有匹配
-- 敏感文件（.env、*.key 等）受保护
 
 关键要求:
 - file_path 必须是绝对路径
-- old_text 必须与文件中的内容**完全匹配**（包括空格和换行）
-- 如果匹配失败，检查空格、缩进和换行符
+- old_string 必须与文件中的内容**完全匹配**（包括空格和换行）
+- old_string/new_string 不要包含 read_file 的行号前缀
+- read_file 行号前缀格式：空格 + 行号 + Tab
+- new_string 必须与 old_string 不同
 - 默认只替换第一处匹配；使用 replace_all 替换全部`,
   input_schema: {
     type: 'object',
@@ -140,20 +142,20 @@ export const EDIT_FILE_TOOL: ToolDefinition = {
         type: 'string',
         description: '文件绝对路径',
       },
-      old_text: {
+      old_string: {
         type: 'string',
         description: '要替换的原文本（必须精确匹配）',
       },
-      new_text: {
+      new_string: {
         type: 'string',
-        description: '替换后的新文本',
+        description: '替换后的新文本（必须与 old_string 不同）',
       },
       replace_all: {
         type: 'boolean',
         description: '是否替换所有匹配（可选，默认 false）',
       },
     },
-    required: ['file_path', 'old_text', 'new_text'],
+    required: ['file_path', 'old_string', 'new_string'],
   },
 };
 

@@ -49,7 +49,8 @@ loadPromptWithVars('system/identity.md', { productName: PRODUCT_NAME })
 - 使用位置：`src/core/planMode.ts`
 - 使用位置：`src/core/reminder.ts`
 - 作用：组装 `createSystemPrompt()` 和 `createSubagentSystemPrompt()`
-  - 包含 Scratchpad / 子代理基础约束 / 规划模式模板 / 提醒模板
+  - 包含 Scratchpad / 子代理基础约束 / 子代理包装器 / 规划模式模板 / 提醒模板
+  - identity-sdk.md / identity-custom-agent.md 可通过 `AI_AGENT_IDENTITY_MODE` 或调用方传参启用
 
 ### agent/
 - 使用位置：`src/core/agents.ts`

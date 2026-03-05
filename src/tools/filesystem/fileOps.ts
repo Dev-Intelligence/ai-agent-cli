@@ -4,16 +4,19 @@
 
 import fs from 'fs-extra';
 import path from 'node:path';
-import { safePath } from '../../services/system/security.js';
-import { validateFileAccess } from '../../services/system/sensitiveFiles.js';
-import { getFileReadTimestamp, recordFileRead } from '../../services/system/fileFreshness.js';
 import type { ToolExecutionResult, ToolResultContentBlock } from '../../core/types.js';
 
 const MAX_OUTPUT_SIZE = 0.25 * 1024 * 1024; // 0.25MB
 const MAX_LINE_LENGTH = 2000;
 const MAX_IMAGE_SIZE = 3.75 * 1024 * 1024; // 3.75MB
 const MAX_PDF_SIZE = 10 * 1024 * 1024; // 10MB
-const PATH_HINT = '允许目录: 工作目录、用户主目录、/tmp、/var/tmp。';
+const DEFAULT_READ_LIMIT = 2000;
+const MIN_LINE_NUMBER_WIDTH = 6;
+const DIFF_CONTEXT = 3;
+const MAX_TOOL_RESULT_CHARS = 100000;
+const MAX_FIELD_CHARS = 40000;
+const MIN_FIELD_CHARS = 10000;
+const CLIPPED_NOTE = '<response clipped><NOTE>To save on context only part of this file has been shown to you. You should retry this tool after you have searched inside the file with Grep in order to find the line numbers of what you are looking for.</NOTE>';
 
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp']);
 
@@ -96,6 +99,48 @@ const BINARY_EXTENSIONS = new Set([
   '.fla',
 ]);
 
+type StructuredPatchHunk = {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: string[];
+};
+
+type GitDiff = {
+  filename: string;
+  status: 'modified' | 'added';
+  additions: number;
+  deletions: number;
+  changes: number;
+  patch: string;
+};
+
+type FileWriteResult = {
+  type: 'create' | 'update';
+  filePath: string;
+  content: string;
+  structuredPatch: StructuredPatchHunk[];
+  originalFile: string | null;
+  gitDiff?: GitDiff;
+};
+
+type FileEditResult = {
+  filePath: string;
+  oldString: string;
+  newString: string;
+  originalFile: string;
+  structuredPatch: StructuredPatchHunk[];
+  userModified: boolean;
+  replaceAll: boolean;
+  gitDiff?: GitDiff;
+};
+
+type DiffOp = {
+  type: 'equal' | 'insert' | 'delete';
+  line: string;
+};
+
 function formatFileSizeError(sizeInBytes: number): string {
   const sizeKB = Math.round(sizeInBytes / 1024);
   const limitKB = Math.round(MAX_OUTPUT_SIZE / 1024);
@@ -114,12 +159,9 @@ function buildError(message: string): ToolExecutionResult {
   };
 }
 
-function formatPathError(error: unknown): string {
-  const msg = error instanceof Error ? error.message : String(error);
-  if (msg.startsWith('路径越界') || msg.startsWith('路径非法')) {
-    return `${msg} ${PATH_HINT}`;
-  }
-  return msg;
+function splitLines(text: string): string[] {
+  if (!text) return [];
+  return text.split(/\r?\n/);
 }
 
 function sliceLines(
@@ -127,13 +169,342 @@ function sliceLines(
   offset?: number,
   limit?: number
 ): { startLine: number; sliced: string[]; totalLines: number } {
-  const startLine = offset && offset > 0 ? offset : 1;
+  const startLine = typeof offset === 'number' && offset > 0 ? Math.floor(offset) : 1;
   const startIndex = Math.max(startLine - 1, 0);
   const totalLines = lines.length;
-  const sliced = limit && limit > 0
-    ? lines.slice(startIndex, startIndex + limit)
+  const effectiveLimit = typeof limit === 'number' ? Math.floor(limit) : DEFAULT_READ_LIMIT;
+  const sliced = effectiveLimit > 0
+    ? lines.slice(startIndex, startIndex + effectiveLimit)
     : lines.slice(startIndex);
   return { startLine, sliced, totalLines };
+}
+
+function formatLineNumberPrefix(lineNumber: number, width: number): string {
+  return `${String(lineNumber).padStart(width, ' ')}\t`;
+}
+
+function addLineNumbers(lines: string[], startLine: number): string {
+  if (lines.length === 0) return '';
+  const endLine = startLine + lines.length - 1;
+  const width = Math.max(MIN_LINE_NUMBER_WIDTH, String(endLine).length);
+  return lines
+    .map((line, index) => `${formatLineNumberPrefix(startLine + index, width)}${line}`)
+    .join('\n');
+}
+
+function clipText(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  const sliceLength = Math.max(0, limit - CLIPPED_NOTE.length);
+  return `${value.slice(0, sliceLength)}${CLIPPED_NOTE}`;
+}
+
+function ensureResultSize<T extends FileWriteResult | FileEditResult>(result: T): T {
+  const initialSize = JSON.stringify(result).length;
+  if (initialSize <= MAX_TOOL_RESULT_CHARS) return result;
+
+  const noPatch = { ...result, structuredPatch: [] as StructuredPatchHunk[] } as T;
+  if (JSON.stringify(noPatch).length <= MAX_TOOL_RESULT_CHARS) return noPatch;
+
+  const hasContent = 'content' in result;
+  const clipped = {
+    ...noPatch,
+    ...(hasContent ? { content: clipText((result as FileWriteResult).content, MAX_FIELD_CHARS) } : {}),
+    originalFile: result.originalFile
+      ? clipText(result.originalFile, MAX_FIELD_CHARS)
+      : result.originalFile,
+  } as T;
+  if (JSON.stringify(clipped).length <= MAX_TOOL_RESULT_CHARS) return clipped;
+
+  const tighter = {
+    ...clipped,
+    ...(hasContent ? { content: clipText((result as FileWriteResult).content, MIN_FIELD_CHARS) } : {}),
+    originalFile: result.originalFile
+      ? clipText(result.originalFile, MIN_FIELD_CHARS)
+      : result.originalFile,
+  } as T;
+
+  if (JSON.stringify(tighter).length <= MAX_TOOL_RESULT_CHARS) return tighter;
+
+  const noGitDiff = { ...tighter, gitDiff: undefined } as T;
+  return noGitDiff;
+}
+
+function buildDiffOps(oldLines: string[], newLines: string[]): DiffOp[] {
+  if (oldLines.length === 0 && newLines.length === 0) return [];
+  if (oldLines.length === 0) return newLines.map((line) => ({ type: 'insert', line }));
+  if (newLines.length === 0) return oldLines.map((line) => ({ type: 'delete', line }));
+
+  const max = oldLines.length + newLines.length;
+  let v = new Map<number, number>();
+  v.set(1, 0);
+  const trace: Array<Map<number, number>> = [];
+
+  for (let d = 0; d <= max; d += 1) {
+    const vNew = new Map<number, number>();
+    for (let k = -d; k <= d; k += 2) {
+      let x: number;
+      const vKMinus = v.get(k - 1) ?? 0;
+      const vKPlus = v.get(k + 1) ?? 0;
+      if (k === -d || (k !== d && vKMinus < vKPlus)) {
+        x = vKPlus;
+      } else {
+        x = vKMinus + 1;
+      }
+      let y = x - k;
+      while (x < oldLines.length && y < newLines.length && oldLines[x] === newLines[y]) {
+        x += 1;
+        y += 1;
+      }
+      vNew.set(k, x);
+      if (x >= oldLines.length && y >= newLines.length) {
+        trace.push(vNew);
+        return backtrackDiff(trace, oldLines, newLines);
+      }
+    }
+    trace.push(vNew);
+    v = vNew;
+  }
+
+  return backtrackDiff(trace, oldLines, newLines);
+}
+
+function backtrackDiff(
+  trace: Array<Map<number, number>>,
+  oldLines: string[],
+  newLines: string[]
+): DiffOp[] {
+  let x = oldLines.length;
+  let y = newLines.length;
+  const ops: DiffOp[] = [];
+
+  for (let d = trace.length - 1; d >= 0; d -= 1) {
+    const v = trace[d];
+    const k = x - y;
+    let prevK: number;
+    const vKMinus = v.get(k - 1) ?? 0;
+    const vKPlus = v.get(k + 1) ?? 0;
+
+    if (k === -d || (k !== d && vKMinus < vKPlus)) {
+      prevK = k + 1;
+    } else {
+      prevK = k - 1;
+    }
+
+    const prevX = v.get(prevK) ?? 0;
+    const prevY = prevX - prevK;
+
+    while (x > prevX && y > prevY) {
+      ops.push({ type: 'equal', line: oldLines[x - 1] });
+      x -= 1;
+      y -= 1;
+    }
+
+    if (d === 0) break;
+
+    if (x === prevX) {
+      ops.push({ type: 'insert', line: newLines[y - 1] });
+      y -= 1;
+    } else {
+      ops.push({ type: 'delete', line: oldLines[x - 1] });
+      x -= 1;
+    }
+  }
+
+  return ops.reverse();
+}
+
+function buildStructuredPatch(oldLines: string[], newLines: string[]): StructuredPatchHunk[] {
+  if (oldLines.length === newLines.length && oldLines.every((line, index) => line === newLines[index])) {
+    return [];
+  }
+
+  const ops = buildDiffOps(oldLines, newLines);
+  const hunks: StructuredPatchHunk[] = [];
+  let hunk: StructuredPatchHunk | null = null;
+  let preContext: Array<{ line: string; oldLine: number; newLine: number }> = [];
+  let equalRun: Array<{ line: string; oldLine: number; newLine: number }> = [];
+  let oldLineNo = 1;
+  let newLineNo = 1;
+
+  for (const op of ops) {
+    if (op.type === 'equal') {
+      const info = { line: op.line, oldLine: oldLineNo, newLine: newLineNo };
+      if (hunk) {
+        hunk.lines.push(` ${op.line}`);
+        hunk.oldLines += 1;
+        hunk.newLines += 1;
+        equalRun.push(info);
+
+        if (equalRun.length > DIFF_CONTEXT * 2) {
+          const removeCount = equalRun.length - DIFF_CONTEXT;
+          hunk.lines.splice(hunk.lines.length - removeCount, removeCount);
+          hunk.oldLines -= removeCount;
+          hunk.newLines -= removeCount;
+          hunks.push(hunk);
+          preContext = equalRun.slice(-DIFF_CONTEXT);
+          hunk = null;
+          equalRun = [];
+        }
+      } else {
+        preContext.push(info);
+        if (preContext.length > DIFF_CONTEXT) preContext.shift();
+      }
+
+      oldLineNo += 1;
+      newLineNo += 1;
+      continue;
+    }
+
+    if (!hunk) {
+      const startOld = preContext.length > 0 ? preContext[0].oldLine : oldLineNo;
+      const startNew = preContext.length > 0 ? preContext[0].newLine : newLineNo;
+      hunk = {
+        oldStart: startOld,
+        newStart: startNew,
+        oldLines: 0,
+        newLines: 0,
+        lines: [],
+      };
+      for (const ctx of preContext) {
+        hunk.lines.push(` ${ctx.line}`);
+        hunk.oldLines += 1;
+        hunk.newLines += 1;
+      }
+    }
+
+    preContext = [];
+    equalRun = [];
+
+    if (op.type === 'delete') {
+      hunk.lines.push(`-${op.line}`);
+      hunk.oldLines += 1;
+      oldLineNo += 1;
+    } else {
+      hunk.lines.push(`+${op.line}`);
+      hunk.newLines += 1;
+      newLineNo += 1;
+    }
+  }
+
+  if (hunk) hunks.push(hunk);
+  return hunks;
+}
+
+function buildWriteResult(
+  filePath: string,
+  originalFile: string | null,
+  content: string
+): FileWriteResult {
+  const oldLines = splitLines(originalFile ?? '');
+  const newLines = splitLines(content);
+  const structuredPatch = buildStructuredPatch(oldLines, newLines);
+  const gitDiff = buildGitDiff(
+    filePath,
+    originalFile === null ? 'added' : 'modified',
+    structuredPatch,
+    originalFile === null
+  );
+
+  const result: FileWriteResult = {
+    type: originalFile === null ? 'create' : 'update',
+    filePath,
+    content,
+    structuredPatch,
+    originalFile,
+    gitDiff,
+  };
+
+  return ensureResultSize(result);
+}
+
+function buildEditResult(
+  filePath: string,
+  oldString: string,
+  newString: string,
+  originalFile: string,
+  replaceAll: boolean,
+  updatedFile: string
+): FileEditResult {
+  const oldLines = splitLines(originalFile);
+  const newLines = splitLines(updatedFile);
+  const structuredPatch = buildStructuredPatch(oldLines, newLines);
+  const gitDiff = buildGitDiff(filePath, 'modified', structuredPatch, false);
+
+  const result: FileEditResult = {
+    filePath,
+    oldString,
+    newString,
+    originalFile,
+    structuredPatch,
+    userModified: false,
+    replaceAll,
+    gitDiff,
+  };
+
+  return ensureResultSize(result);
+}
+
+function buildGitDiff(
+  filePath: string,
+  status: 'modified' | 'added',
+  structuredPatch: StructuredPatchHunk[],
+  isNewFile: boolean
+): GitDiff | undefined {
+  const additions = structuredPatch.reduce(
+    (count, hunk) => count + hunk.lines.filter((line) => line.startsWith('+')).length,
+    0
+  );
+  const deletions = structuredPatch.reduce(
+    (count, hunk) => count + hunk.lines.filter((line) => line.startsWith('-')).length,
+    0
+  );
+  const changes = additions + deletions;
+
+  if (structuredPatch.length === 0) {
+    return {
+      filename: filePath,
+      status,
+      additions,
+      deletions,
+      changes,
+      patch: '',
+    };
+  }
+
+  const header: string[] = [];
+  header.push(`diff --git a/${filePath} b/${filePath}`);
+
+  if (status === 'added') {
+    header.push('new file mode 100644');
+    header.push('--- /dev/null');
+    header.push(`+++ b/${filePath}`);
+  } else {
+    header.push(`--- a/${filePath}`);
+    header.push(`+++ b/${filePath}`);
+  }
+
+  for (const hunk of structuredPatch) {
+    const oldStart = isNewFile ? 0 : hunk.oldStart;
+    const oldLines = isNewFile ? 0 : hunk.oldLines;
+    const oldRange = `${oldStart},${oldLines}`;
+    const newRange = `${hunk.newStart},${hunk.newLines}`;
+    header.push(`@@ -${oldRange} +${newRange} @@`);
+    header.push(...hunk.lines);
+  }
+
+  let patch = header.join('\n');
+  if (patch.length > MAX_FIELD_CHARS) {
+    patch = clipText(patch, MAX_FIELD_CHARS);
+  }
+
+  return {
+    filename: filePath,
+    status,
+    additions,
+    deletions,
+    changes,
+    patch,
+  };
 }
 
 /**
@@ -150,20 +521,12 @@ export async function runRead(
       return buildError('错误: file_path 必须是绝对路径。');
     }
 
-    // 安全路径检查
-    let fullPath: string;
-    try {
-      fullPath = safePath(workdir, filePath);
-    } catch (error: unknown) {
-      return buildError(`错误: ${formatPathError(error)}`);
-    }
+    const fullPath = path.resolve(workdir, filePath);
 
-    // 检查文件是否存在
     if (!(await fs.pathExists(fullPath))) {
       return buildError(`错误: 文件不存在: ${filePath}`);
     }
 
-    // 检查是否为目录
     const stats = await fs.stat(fullPath);
     if (stats.isDirectory()) {
       return buildError(`错误: ${filePath} 是一个目录，请使用 bash ls 命令查看目录内容`);
@@ -198,7 +561,6 @@ export async function runRead(
           data: buffer.toString('base64'),
         },
       };
-      recordFileRead(fullPath, stats.mtimeMs);
       return {
         content: [block],
         uiContent: 'Read image',
@@ -221,22 +583,13 @@ export async function runRead(
           data: buffer.toString('base64'),
         },
       };
-      recordFileRead(fullPath, stats.mtimeMs);
       return {
         content: [block],
         uiContent: 'Read pdf',
       };
     }
 
-    if (stats.size > MAX_OUTPUT_SIZE && !offset && !limit) {
-      return buildError(formatFileSizeError(stats.size));
-    }
-
-    // 读取文件内容
     const content = await fs.readFile(fullPath, 'utf-8');
-
-    // 记录读取时间戳
-    recordFileRead(fullPath, stats.mtimeMs);
 
     if (ext === '.ipynb') {
       try {
@@ -253,15 +606,16 @@ export async function runRead(
           }
         }
         const extracted = sources.join('\n');
-        const allLines = extracted.split(/\r?\n/);
-        const { sliced } = sliceLines(allLines, offset, limit);
-        const processed = sliced.map(clampLine).join('\n');
-        if (Buffer.byteLength(processed, 'utf8') > MAX_OUTPUT_SIZE) {
-          return buildError(formatFileSizeError(Buffer.byteLength(processed, 'utf8')));
+        const allLines = splitLines(extracted);
+        const { startLine, sliced } = sliceLines(allLines, offset, limit);
+        const processedLines = sliced.map(clampLine);
+        const numbered = addLineNumbers(processedLines, startLine);
+        if (Buffer.byteLength(numbered, 'utf8') > MAX_OUTPUT_SIZE) {
+          return buildError(formatFileSizeError(Buffer.byteLength(numbered, 'utf8')));
         }
         return {
-          content: processed,
-          uiContent: processed,
+          content: numbered,
+          uiContent: numbered,
         };
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : String(error);
@@ -269,18 +623,18 @@ export async function runRead(
       }
     }
 
-    // 按行分割
-    const allLines = content.split(/\r?\n/);
-    const { sliced } = sliceLines(allLines, offset, limit);
-    const processed = sliced.map(clampLine).join('\n');
+    const allLines = splitLines(content);
+    const { startLine, sliced } = sliceLines(allLines, offset, limit);
+    const processedLines = sliced.map(clampLine);
+    const numbered = addLineNumbers(processedLines, startLine);
 
-    if (Buffer.byteLength(processed, 'utf8') > MAX_OUTPUT_SIZE) {
-      return buildError(formatFileSizeError(Buffer.byteLength(processed, 'utf8')));
+    if (Buffer.byteLength(numbered, 'utf8') > MAX_OUTPUT_SIZE) {
+      return buildError(formatFileSizeError(Buffer.byteLength(numbered, 'utf8')));
     }
 
     return {
-      content: processed,
-      uiContent: processed,
+      content: numbered,
+      uiContent: numbered,
     };
   } catch (error: unknown) {
     if (error instanceof Error) {
@@ -297,53 +651,31 @@ export async function runWrite(
   workdir: string,
   filePath: string,
   content: string
-): Promise<string> {
+): Promise<ToolExecutionResult> {
   try {
     if (!path.isAbsolute(filePath)) {
-      return '错误: file_path 必须是绝对路径。';
+      return buildError('错误: file_path 必须是绝对路径。');
     }
 
-    // 敏感文件保护
-    validateFileAccess(workdir, filePath, 'write');
-
-    // 安全路径检查
-    let fullPath: string;
-    try {
-      fullPath = safePath(workdir, filePath);
-    } catch (error: unknown) {
-      return `错误: ${formatPathError(error)}`;
-    }
-
+    const fullPath = path.resolve(workdir, filePath);
     const exists = await fs.pathExists(fullPath);
-    if (exists) {
-      const readTimestamp = getFileReadTimestamp(fullPath);
-      if (!readTimestamp) {
-        return '错误: 文件尚未读取，请先使用 read_file 读取后再写入。';
-      }
-      const stats = await fs.stat(fullPath);
-      if (stats.mtimeMs > readTimestamp) {
-        return '错误: 文件在读取后已被修改，请重新读取后再写入。';
-      }
-    }
+    const originalFile = exists ? await fs.readFile(fullPath, 'utf-8') : null;
 
-    // 确保父目录存在
     await fs.ensureDir(path.dirname(fullPath));
-
-    // 写入文件
     await fs.writeFile(fullPath, content, 'utf-8');
 
-    // 获取文件大小
-    const stats = await fs.stat(fullPath);
-    const sizeKB = (stats.size / 1024).toFixed(2);
+    const result = buildWriteResult(filePath, originalFile, content);
 
-    recordFileRead(fullPath, stats.mtimeMs);
-
-    return `成功写入文件: ${filePath} (${sizeKB} KB, ${content.split('\n').length} 行)`;
+    return {
+      content: JSON.stringify(result),
+      uiContent: `${result.type === 'create' ? 'Created' : 'Updated'} ${filePath}`,
+      rawOutput: result,
+    };
   } catch (error: unknown) {
     if (error instanceof Error) {
-      return `错误: ${error.message}`;
+      return buildError(`错误: ${error.message}`);
     }
-    return `错误: ${String(error)}`;
+    return buildError(`错误: ${String(error)}`);
   }
 }
 
@@ -353,78 +685,60 @@ export async function runWrite(
 export async function runEdit(
   workdir: string,
   filePath: string,
-  oldText: string,
-  newText: string,
+  oldString: string,
+  newString: string,
   replaceAll: boolean = false
-): Promise<string> {
+): Promise<ToolExecutionResult> {
   try {
     if (!path.isAbsolute(filePath)) {
-      return '错误: file_path 必须是绝对路径。';
+      return buildError('错误: file_path 必须是绝对路径。');
     }
 
-    // 敏感文件保护
-    validateFileAccess(workdir, filePath, 'edit');
-
-    // 安全路径检查
-    let fullPath: string;
-    try {
-      fullPath = safePath(workdir, filePath);
-    } catch (error: unknown) {
-      return `错误: ${formatPathError(error)}`;
+    if (oldString === newString) {
+      return buildError('错误: new_string 必须与 old_string 不同。');
     }
 
-    // 检查文件是否存在
+    const fullPath = path.resolve(workdir, filePath);
+
     if (!(await fs.pathExists(fullPath))) {
-      return `错误: 文件不存在: ${filePath}`;
+      return buildError(`错误: 文件不存在: ${filePath}`);
     }
 
-    const readTimestamp = getFileReadTimestamp(fullPath);
-    if (!readTimestamp) {
-      return '错误: 文件尚未读取，请先使用 read_file 读取后再编辑。';
-    }
-    const stats = await fs.stat(fullPath);
-    if (stats.mtimeMs > readTimestamp) {
-      return '错误: 文件在读取后已被修改，请重新读取后再编辑。';
-    }
-
-    // 读取文件内容
     const content = await fs.readFile(fullPath, 'utf-8');
 
-    // 检查 old_text 是否存在
-    if (!content.includes(oldText)) {
-      return `错误: 在文件中未找到要替换的文本。请确保 old_text 精确匹配。\n文件前100字符: ${content.slice(0, 100)}...`;
+    if (!content.includes(oldString)) {
+      return buildError(`错误: 在文件中未找到要替换的文本。请确保 old_string 精确匹配。\n文件前100字符: ${content.slice(0, 100)}...`);
     }
 
-    // 计算匹配次数
-    const matches = content.split(oldText).length - 1;
-
+    const matches = content.split(oldString).length - 1;
     if (matches > 1 && !replaceAll) {
-      return `错误: old_text 在文件中出现 ${matches} 次。请提供更具体的文本以确保唯一匹配，或使用 replace_all 参数替换所有匹配。`;
+      return buildError(`错误: old_string 在文件中出现 ${matches} 次。请提供更具体的文本以确保唯一匹配，或使用 replace_all 参数替换所有匹配。`);
     }
 
-    // 替换文本
-    const newContent = replaceAll
-      ? content.replaceAll(oldText, newText)
-      : content.replace(oldText, newText);
+    const updated = replaceAll
+      ? content.replaceAll(oldString, newString)
+      : content.replace(oldString, newString);
 
-    // 写回文件
-    await fs.writeFile(fullPath, newContent, 'utf-8');
+    await fs.writeFile(fullPath, updated, 'utf-8');
 
-    // 计算变化
-    const oldLines = oldText.split('\n').length;
-    const newLines = newText.split('\n').length;
-    const lineDiff = newLines - oldLines;
+    const result = buildEditResult(
+      filePath,
+      oldString,
+      newString,
+      content,
+      replaceAll,
+      updated
+    );
 
-    const updatedStats = await fs.stat(fullPath);
-    recordFileRead(fullPath, updatedStats.mtimeMs);
-
-    return `成功编辑文件: ${filePath}
-替换了 ${oldLines} 行，新增 ${lineDiff > 0 ? '+' : ''}${lineDiff} 行
-文件现在共 ${newContent.split('\n').length} 行`;
+    return {
+      content: JSON.stringify(result),
+      uiContent: `Edited ${filePath}`,
+      rawOutput: result,
+    };
   } catch (error: unknown) {
     if (error instanceof Error) {
-      return `错误: ${error.message}`;
+      return buildError(`错误: ${error.message}`);
     }
-    return `错误: ${String(error)}`;
+    return buildError(`错误: ${String(error)}`);
   }
 }

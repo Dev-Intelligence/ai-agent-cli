@@ -88,8 +88,8 @@ export function createExecuteTool(config: ToolExecutorConfig): ExecuteToolFunc {
           result = await runEdit(
             workdir,
             input.file_path as string,
-            input.old_text as string,
-            input.new_text as string,
+            input.old_string as string,
+            input.new_string as string,
             input.replace_all as boolean | undefined
           );
           break;

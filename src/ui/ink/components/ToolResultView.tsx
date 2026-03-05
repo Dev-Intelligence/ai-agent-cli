@@ -18,17 +18,6 @@ export interface ToolResultViewProps {
 const MAX_RENDERED_LINES = 10;
 const MAX_READ_FILE_LINES = 5;
 
-function stripReadFileSummary(raw: string): string {
-  return raw.replace(/\n*\[显示第\s+\d+-\d+\s+行，共\s+\d+\s+行\]\s*$/g, '');
-}
-
-function stripLineNumbers(raw: string): string {
-  return raw
-    .split('\n')
-    .map((line) => line.replace(/^\d+→/, ''))
-    .join('\n');
-}
-
 function getReadFileLanguage(input?: Record<string, unknown>): string {
   const filePath =
     typeof input?.file_path === 'string'
@@ -65,8 +54,7 @@ export function ToolResultView({ name, content, isError, input }: ToolResultView
   const isReadFile = name.toLowerCase() === 'read_file';
 
   if (isReadFile && !isError) {
-    const cleaned = stripLineNumbers(stripReadFileSummary(content));
-    const contentWithFallback = cleaned.trim() ? cleaned : '(No content)';
+    const contentWithFallback = content.trim() ? content : '(No content)';
     if (contentWithFallback === 'Read image' || contentWithFallback === 'Read pdf') {
       return (
         <Text>
@@ -76,10 +64,7 @@ export function ToolResultView({ name, content, isError, input }: ToolResultView
       );
     }
     const lines = contentWithFallback.split('\n');
-    const shownLines = lines
-      .slice(0, MAX_READ_FILE_LINES)
-      .filter((line) => line.trim() !== '')
-      .join('\n');
+    const shownLines = lines.slice(0, MAX_READ_FILE_LINES).join('\n');
     const extraLines = Math.max(0, lines.length - MAX_READ_FILE_LINES);
     const language = getReadFileLanguage(input);
 

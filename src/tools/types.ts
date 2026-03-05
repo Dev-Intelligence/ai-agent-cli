@@ -33,8 +33,9 @@ export interface WriteFileInput {
 // 文件编辑输入
 export interface EditFileInput {
   file_path: string;
-  old_text: string;
-  new_text: string;
+  old_string: string;
+  new_string: string;
+  replace_all?: boolean;
 }
 
 // Todo 工具输入
