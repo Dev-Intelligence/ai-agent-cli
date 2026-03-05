@@ -5,11 +5,6 @@
 import type { TodoItem } from '../types.js';
 
 /**
- * Todo 约束常量
- */
-const MAX_TODO_ITEMS = 20;
-
-/**
  * Todo 管理器
  */
 export class TodoManager {
@@ -20,11 +15,6 @@ export class TodoManager {
    */
   update(items: TodoItem[]): string {
     try {
-      // 检查最大条目数
-      if (items.length > MAX_TODO_ITEMS) {
-        return `错误: 最多允许 ${MAX_TODO_ITEMS} 个任务，当前有 ${items.length} 个`;
-      }
-
       // 验证每个条目
       const seenIds = new Set<string>();
       let inProgressCount = 0;
@@ -96,24 +86,15 @@ export class TodoManager {
 
     for (let i = 0; i < this.todos.length; i++) {
       const item = this.todos[i];
-      const num = `${i + 1}.`;
-
       if (item.status === 'completed') {
-        lines.push(`  ✓ ${num} ${item.content}`);
+        lines.push(` ◼ ${item.content}`);
       } else if (item.status === 'in_progress') {
-        lines.push(`  ● ${num} ${item.activeForm}...`);
+        const displayText = item.activeForm.trim() || item.content;
+        lines.push(` ◻ ${displayText}`);
       } else {
-        lines.push(`  ○ ${num} ${item.content}`);
+        lines.push(` ◻ ${item.content}`);
       }
     }
-
-    // 添加统计信息
-    const completed = this.todos.filter((t) => t.status === 'completed').length;
-    const total = this.todos.length;
-    const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
-
-    lines.push('');
-    lines.push(`进度: ${completed}/${total} (${progress}%)`);
 
     return lines.join('\n');
   }

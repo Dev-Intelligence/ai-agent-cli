@@ -353,22 +353,16 @@ export const ASK_USER_QUESTION_TOOL: ToolDefinition = {
 // 8. Todo 管理工具（兼容别名）
 export const TODO_WRITE_TOOL: ToolDefinition = {
   name: 'TodoWrite',
-  description: `管理任务列表，跟踪多步骤任务的进度。
+  description: `更新当前会话的任务列表，用于跟踪进度与待办事项。
 
-功能:
-- 创建、更新任务状态
-- 最多 ${DEFAULTS.maxTodos} 个任务
+关键要求:
 - 同时只能有 1 个任务为 in_progress
+- 每个任务必须提供 content（祈使句）与 activeForm（进行时）
 
 状态说明:
 - pending: 待处理
 - in_progress: 进行中
 - completed: 已完成
-
-重要:
-- 对于复杂任务，**必须**使用此工具进行规划
-- 完成任务后**立即**标记为 completed
-- 不要批量处理后再更新状态
 
 使用建议:
 - 任务描述使用祈使句（如"创建文件"）
@@ -378,7 +372,7 @@ export const TODO_WRITE_TOOL: ToolDefinition = {
     properties: {
       todos: {
         type: 'array',
-        description: '任务列表（最多20个）',
+        description: '任务列表',
         items: {
           type: 'object',
           properties: {
