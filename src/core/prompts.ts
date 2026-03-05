@@ -38,6 +38,33 @@ Node版本: ${process.version}
 
 export type IdentityMode = 'default' | 'sdk' | 'custom';
 
+export type ToolUseContext = {
+  options?: Record<string, unknown>;
+};
+
+export type MainThreadAgentDefinition = {
+  getSystemPrompt?: (options?: { toolUseContext?: { options?: Record<string, unknown> } }) => string;
+  systemPrompt?: string;
+  memory?: string;
+};
+
+export type ComposeSystemPromptOptions = {
+  mainThreadAgentDefinition?: MainThreadAgentDefinition;
+  toolUseContext?: ToolUseContext;
+  customSystemPrompt?: string;
+  defaultSystemPrompt?: string;
+  appendSystemPrompt?: string;
+  overrideSystemPrompt?: string;
+};
+
+export type AssembleSystemPromptOptions = {
+  includeScratchpad?: boolean;
+  includeEnv?: boolean;
+  includeDynamicBoundary?: boolean;
+};
+
+const SYSTEM_PROMPT_DYNAMIC_BOUNDARY = '__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__';
+
 function resolveIdentityMode(value: unknown): IdentityMode {
   if (value === 'sdk') return 'sdk';
   if (value === 'custom') return 'custom';
@@ -77,7 +104,7 @@ function loadClaudeInstructions(workdir: string, projectFile: string): string | 
   }
 }
 
-function getSystemPromptSections(
+function getBaseSystemPromptSections(
   workdir: string,
   projectFile: string,
   identityMode: IdentityMode
@@ -98,9 +125,129 @@ function getSystemPromptSections(
       ? [loadPromptWithVars('system/workflow.md', {})]
       : []),
     loadPromptWithVars('system/tool-usage.md', {}),
-    getScratchpadInfo(workdir),
-    getEnvInfo(workdir),
   ];
+}
+
+function buildDefaultSystemPrompt(
+  workdir: string,
+  projectFile: string,
+  identityMode: IdentityMode
+): string {
+  return getBaseSystemPromptSections(workdir, projectFile, identityMode)
+    .filter(Boolean)
+    .join('\n\n');
+}
+
+function buildAppendSystemPrompt(
+  skillDescriptions: string,
+  agentDescriptions: string,
+  extraAppend?: string
+): string | null {
+  const sections: string[] = [];
+
+  if (skillDescriptions) {
+    sections.push(`## 可用技能\n\n${skillDescriptions}`);
+  }
+  if (agentDescriptions) {
+    sections.push(`## 子代理类型\n\n${agentDescriptions}`);
+  }
+
+  const outputStylePrompt = getOutputStylePrompt();
+  if (outputStylePrompt) {
+    sections.push(outputStylePrompt);
+  }
+
+  if (extraAppend) {
+    sections.push(extraAppend);
+  }
+
+  const joined = sections.filter(Boolean).join('\n\n');
+  return joined ? joined : null;
+}
+
+function buildDynamicSystemPrompt(
+  workdir: string,
+  options?: AssembleSystemPromptOptions
+): string | null {
+  const sections: string[] = [];
+
+  if (options?.includeScratchpad !== false) {
+    sections.push(getScratchpadInfo(workdir));
+  }
+  if (options?.includeEnv !== false) {
+    sections.push(getEnvInfo(workdir));
+  }
+
+  const joined = sections.filter(Boolean).join('\n\n');
+  return joined ? joined : null;
+}
+
+function resolveMainThreadSystemPrompt(
+  definition?: MainThreadAgentDefinition,
+  toolUseContext?: ToolUseContext
+): string | null {
+  if (!definition) return null;
+
+  if (typeof definition.getSystemPrompt === 'function') {
+    return definition.getSystemPrompt({
+      toolUseContext: toolUseContext ? { options: toolUseContext.options ?? {} } : undefined,
+    });
+  }
+
+  if (typeof definition.systemPrompt === 'string') {
+    return definition.systemPrompt;
+  }
+
+  return null;
+}
+
+/**
+ * 组合主系统提示词（Claude Z51 结构）
+ */
+export function composeSystemPrompt(options: ComposeSystemPromptOptions): string[] {
+  const overridePrompt = options.overrideSystemPrompt?.trim();
+  if (overridePrompt) return [overridePrompt];
+
+  const mainPrompt = resolveMainThreadSystemPrompt(
+    options.mainThreadAgentDefinition,
+    options.toolUseContext
+  );
+  const basePrompt =
+    mainPrompt ||
+    options.customSystemPrompt?.trim() ||
+    options.defaultSystemPrompt?.trim() ||
+    '';
+
+  const sections: string[] = [];
+  if (basePrompt) sections.push(basePrompt);
+
+  const appendPrompt = options.appendSystemPrompt?.trim();
+  if (appendPrompt) sections.push(appendPrompt);
+
+  return sections;
+}
+
+/**
+ * 组装最终系统提示词（Claude fF1 结构）
+ */
+export function assembleSystemPrompt(
+  basePrompts: string[],
+  workdir: string,
+  options?: AssembleSystemPromptOptions
+): string {
+  const notes = loadPromptWithVars('system/claude-notes.md', {});
+  const dynamic = buildDynamicSystemPrompt(workdir, options);
+
+  const sections: string[] = [...basePrompts.filter(Boolean), notes];
+
+  if (dynamic) {
+    if (options?.includeDynamicBoundary !== false) {
+      sections.push(SYSTEM_PROMPT_DYNAMIC_BOUNDARY);
+    }
+    sections.push(dynamic);
+  }
+
+  return sections.filter(Boolean).join('\n\n');
 }
 
 /**
@@ -110,23 +257,42 @@ export function createSystemPrompt(
   workdir: string,
   skillDescriptions: string,
   agentDescriptions: string,
-  options?: { projectFile?: string; identityMode?: IdentityMode }
+  options?: {
+    projectFile?: string;
+    identityMode?: IdentityMode;
+    mainThreadAgentDefinition?: MainThreadAgentDefinition;
+    toolUseContext?: ToolUseContext;
+    customSystemPrompt?: string;
+    appendSystemPrompt?: string;
+    overrideSystemPrompt?: string;
+    includeScratchpad?: boolean;
+    includeEnv?: boolean;
+    includeDynamicBoundary?: boolean;
+  }
 ): string {
   const projectFile = options?.projectFile || PROJECT_FILE;
   const identityMode = resolveIdentityMode(options?.identityMode ?? process.env.AI_AGENT_IDENTITY_MODE);
-  const sections = [
-    ...getSystemPromptSections(workdir, projectFile, identityMode),
-    `## 可用技能\n\n${skillDescriptions}`,
-    `## 子代理类型\n\n${agentDescriptions}`,
-  ];
+  const defaultSystemPrompt = buildDefaultSystemPrompt(workdir, projectFile, identityMode);
+  const appendSystemPrompt = buildAppendSystemPrompt(
+    skillDescriptions,
+    agentDescriptions,
+    options?.appendSystemPrompt
+  );
 
-  const outputStylePrompt = getOutputStylePrompt();
-  if (outputStylePrompt) {
-    sections.push(outputStylePrompt);
-  }
-  sections.push(loadPromptWithVars('system/claude-notes.md', {}));
+  const basePrompts = composeSystemPrompt({
+    mainThreadAgentDefinition: options?.mainThreadAgentDefinition,
+    toolUseContext: options?.toolUseContext,
+    customSystemPrompt: options?.customSystemPrompt,
+    defaultSystemPrompt,
+    appendSystemPrompt: appendSystemPrompt ?? undefined,
+    overrideSystemPrompt: options?.overrideSystemPrompt,
+  });
 
-  return sections.filter(Boolean).join('\n\n');
+  return assembleSystemPrompt(basePrompts, workdir, {
+    includeScratchpad: options?.includeScratchpad,
+    includeEnv: options?.includeEnv,
+    includeDynamicBoundary: options?.includeDynamicBoundary,
+  });
 }
 
 /**
