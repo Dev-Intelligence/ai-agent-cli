@@ -36,6 +36,24 @@ Node版本: ${process.version}
 </env>`;
 }
 
+export type IdentityMode = 'default' | 'sdk' | 'custom';
+
+function resolveIdentityMode(value: unknown): IdentityMode {
+  if (value === 'sdk') return 'sdk';
+  if (value === 'custom') return 'custom';
+  return 'default';
+}
+
+function getIdentityPrompt(identityMode: IdentityMode): string {
+  if (identityMode === 'sdk') {
+    return loadPromptWithVars('system/identity-sdk.md', { productName: PRODUCT_NAME });
+  }
+  if (identityMode === 'custom') {
+    return loadPromptWithVars('system/identity-custom-agent.md', { productName: PRODUCT_NAME });
+  }
+  return loadPromptWithVars('system/identity.md', { productName: PRODUCT_NAME });
+}
+
 function getScratchpadDir(workdir: string): string {
   const sessionId = getSessionId();
   return path.join(workdir, PROJECT_DIR, 'scratchpad', sessionId);
@@ -59,10 +77,14 @@ function loadClaudeInstructions(workdir: string, projectFile: string): string | 
   }
 }
 
-function getSystemPromptSections(workdir: string, projectFile: string): string[] {
+function getSystemPromptSections(
+  workdir: string,
+  projectFile: string,
+  identityMode: IdentityMode
+): string[] {
   const claudeInstructions = loadClaudeInstructions(workdir, projectFile);
   return [
-    loadPromptWithVars('system/identity.md', { productName: PRODUCT_NAME }),
+    getIdentityPrompt(identityMode),
     ...(claudeInstructions ? [claudeInstructions] : []),
     loadPromptWithVars('system/security.md', {}),
     loadPromptWithVars('system/task-management.md', {}),
@@ -88,11 +110,12 @@ export function createSystemPrompt(
   workdir: string,
   skillDescriptions: string,
   agentDescriptions: string,
-  options?: { projectFile?: string }
+  options?: { projectFile?: string; identityMode?: IdentityMode }
 ): string {
   const projectFile = options?.projectFile || PROJECT_FILE;
+  const identityMode = resolveIdentityMode(options?.identityMode ?? process.env.AI_AGENT_IDENTITY_MODE);
   const sections = [
-    ...getSystemPromptSections(workdir, projectFile),
+    ...getSystemPromptSections(workdir, projectFile, identityMode),
     `## 可用技能\n\n${skillDescriptions}`,
     `## 子代理类型\n\n${agentDescriptions}`,
   ];

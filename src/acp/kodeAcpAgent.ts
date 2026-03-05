@@ -430,7 +430,7 @@ export class KodeAcpAgent {
       cwd,
       skillLoader.getDescriptions(),
       getAgentDescriptions(),
-      { projectFile: config.projectFile }
+      { projectFile: config.projectFile, identityMode: 'sdk' }
     );
 
     const mcpRegistry = new MCPRegistry(cwd);
