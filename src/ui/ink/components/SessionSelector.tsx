@@ -2,7 +2,7 @@
  * 会话选择器
  */
 
-import { Box, Text, useInput, useStdout } from 'ink';
+import { Box, Text, useInput } from '../primitives.js';
 import { useEffect, useMemo, useState } from 'react';
 import type { SessionListItem } from '../../../services/session/sessionResume.js';
 import { formatDate } from '../../../utils/dateFormat.js';
@@ -16,26 +16,24 @@ export interface SessionSelectorProps {
 
 export function SessionSelector({ sessions, onSelect, onCancel }: SessionSelectorProps) {
   const colors = getInkColors();
-  const { stdout } = useStdout();
   const [size, setSize] = useState(() => ({
-    rows: stdout?.rows ?? 24,
-    columns: stdout?.columns ?? 80,
+    rows: process.stdout.rows ?? 24,
+    columns: process.stdout.columns ?? 80,
   }));
 
   useEffect(() => {
-    if (!stdout) return;
+    const stdout = process.stdout;
     const update = () => {
       setSize({
         rows: stdout.rows ?? 24,
         columns: stdout.columns ?? 80,
       });
     };
-    update();
     stdout.on('resize', update);
     return () => {
       stdout.off('resize', update);
     };
-  }, [stdout]);
+  }, []);
 
   const [index, setIndex] = useState(0);
   const total = sessions.length;

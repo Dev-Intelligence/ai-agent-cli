@@ -1,7 +1,7 @@
 /**
  * EnhancedSpinner - 增强版 Spinner 组件
  *
- * Claude Code 风格动态状态展示（呼吸灯效果）：
+ *  动态状态展示（呼吸灯效果）：
  * ✱ Thinking… (44s · ↓ 522 tokens · thinking)
  * · Whirring… (1m 14s · ↓ 870 tokens · bash)
  *
@@ -9,7 +9,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { Box, Text } from 'ink';
+import { Box, Text } from '../primitives.js';
 import type { LoadingState } from '../types.js';
 import { isAccessibilityMode, getInkColors } from '../../theme.js';
 import { useElapsedTime } from '../hooks.js';

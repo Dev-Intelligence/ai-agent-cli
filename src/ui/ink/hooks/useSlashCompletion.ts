@@ -3,7 +3,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useInput, type Key } from 'ink';
+import { useInput, type Key } from '../primitives.js';
 import type {
   CompletionContext,
   SlashCommandItem,

@@ -14,36 +14,50 @@ export interface BannerConfig {
   providerDisplayName: string;
   model: string;
   workdir: string;
+  projectFile: string;
   skills: string[];
   agentTypes: string[];
 }
 
 /**
- * 已完成项（固定到 Static 区域的历史条目）
+ * 当前会话上下文的 token 使用快照
+ */
+export interface ContextTokenUsage {
+  currentTokens: number;
+  maxTokens: number;
+  percentage: number;
+}
+
+/**
+ * ContentBlock — 消息内容块
+ */
+export type ContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> }
+  | { type: 'tool_result'; tool_use_id: string; content: string | unknown[]; is_error?: boolean }
+  | { type: 'thinking'; thinking: string };
+
+/**
+ * 已完成项（消息历史条目）
+ * 保留扁平化字段用于渲染，新增可选 content 字段保存完整 ContentBlock 结构
  */
 export type CompletedItem =
   | { id: string; type: 'banner'; config: BannerConfig }
-  | { id: string; type: 'user_message'; text: string }
-  | { id: string; type: 'ai_message'; text: string; elapsed?: number }
-  | { id: string; type: 'tool_use'; toolUseId: string; name: string; detail?: string; status: 'done' | 'error' }
-  | { id: string; type: 'tool_result'; toolUseId: string; name: string; content: string; isError?: boolean; input?: Record<string, unknown> }
+  | { id: string; type: 'user_message'; text: string; content?: ContentBlock[] }
+  | { id: string; type: 'ai_message'; text: string; elapsed?: number; model?: string; timestamp?: number; content?: ContentBlock[] }
+  | { id: string; type: 'thinking'; thinking: string }
+  | { id: string; type: 'redacted_thinking' }
+  | { id: string; type: 'tool_use'; toolUseId: string; name: string; detail?: string; status: 'done' | 'error'; content?: ContentBlock[] }
+  | { id: string; type: 'tool_result'; toolUseId: string; name: string; content: string; isError?: boolean; input?: Record<string, unknown>; contentBlocks?: ContentBlock[] }
   | { id: string; type: 'system'; level: 'success' | 'error' | 'warning' | 'info'; text: string }
+  | { id: string; type: 'compact_boundary' }
+  | { id: string; type: 'rate_limit'; text: string; retryInSeconds?: number }
+  | { id: string; type: 'api_error'; error: string; retryInMs?: number; retryAttempt?: number; maxRetries?: number }
+  | { id: string; type: 'user_command'; command: string; args?: string; isSkill?: boolean }
+  | { id: string; type: 'user_image'; imageId?: number }
+  | { id: string; type: 'bash_input'; command: string }
+  | { id: string; type: 'bash_output'; stdout?: string; stderr?: string }
   | { id: string; type: 'divider' };
-
-/**
- * 应用阶段（活跃区域显示状态）
- * @deprecated 由 loading/streaming/focus 三个正交状态替代
- */
-export type AppPhase =
-  | { type: 'input' }
-  | { type: 'thinking' }
-  | { type: 'streaming'; text: string }
-  | { type: 'tool_active'; name: string; detail?: string }
-  | {
-      type: 'question';
-      questions: unknown[];
-      resolve: (r: string) => void;
-    };
 
 // ─── 正交状态类型 ───
 
@@ -117,11 +131,20 @@ export type FocusTarget =
  */
 export type CompletedItemInput =
   | { type: 'banner'; config: BannerConfig }
-  | { type: 'user_message'; text: string }
-  | { type: 'ai_message'; text: string; elapsed?: number }
-  | { type: 'tool_use'; toolUseId: string; name: string; detail?: string; status: 'done' | 'error' }
-  | { type: 'tool_result'; toolUseId: string; name: string; content: string; isError?: boolean; input?: Record<string, unknown> }
+  | { type: 'user_message'; text: string; content?: ContentBlock[] }
+  | { type: 'ai_message'; text: string; elapsed?: number; model?: string; timestamp?: number; content?: ContentBlock[] }
+  | { type: 'thinking'; thinking: string }
+  | { type: 'redacted_thinking' }
+  | { type: 'tool_use'; toolUseId: string; name: string; detail?: string; status: 'done' | 'error'; content?: ContentBlock[] }
+  | { type: 'tool_result'; toolUseId: string; name: string; content: string; isError?: boolean; input?: Record<string, unknown>; contentBlocks?: ContentBlock[] }
   | { type: 'system'; level: 'success' | 'error' | 'warning' | 'info'; text: string }
+  | { type: 'compact_boundary' }
+  | { type: 'rate_limit'; text: string; retryInSeconds?: number }
+  | { type: 'api_error'; error: string; retryInMs?: number; retryAttempt?: number; maxRetries?: number }
+  | { type: 'user_command'; command: string; args?: string; isSkill?: boolean }
+  | { type: 'user_image'; imageId?: number }
+  | { type: 'bash_input'; command: string }
+  | { type: 'bash_output'; stdout?: string; stderr?: string }
   | { type: 'divider' };
 
 /** 活跃中的工具调用（非 Static，允许动画与状态更新） */

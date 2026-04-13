@@ -3,7 +3,7 @@
  */
 
 import { useState } from 'react';
-import type { Key } from 'ink';
+import type { Key } from '../primitives.js';
 import { useDoublePress } from './useDoublePress.js';
 import { Cursor } from '../../../utils/cursor.js';
 import { normalizeLineEndings } from '../utils/paste.js';

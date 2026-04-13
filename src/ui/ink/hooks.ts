@@ -1,28 +1,25 @@
 /**
- * useAppStore — 精确订阅 Hook
+ * useAppState — 精确订阅 Hook
  *
  * 基于 useSyncExternalStore，组件只在选择的 state slice 变化时重渲染。
  */
 
 import { useSyncExternalStore, useRef, useCallback, useState, useEffect } from 'react';
-import type { AppStore, AppState } from './store.js';
+import type { AppStateStore, AppState } from './store.js';
 
 /**
- * 精确订阅 AppStore 的某个切片
+ * 精确订阅 AppStateStore 的某个切片
  *
  * @example
- * const phase = useAppStore(store, s => s.phase);
- * const items = useAppStore(store, s => s.completedItems);
+ * const items = useAppState(store, s => s.completedItems);
  */
-export function useAppStore<T>(store: AppStore, selector: (s: AppState) => T): T {
-  // 缓存 selector 结果，避免每次都触发重渲染
-  const prevRef = useRef<T>();
+export function useAppState<T>(store: AppStateStore, selector: (s: AppState) => T): T {
+  const prevRef = useRef<T>(undefined as T);
   const selectorRef = useRef(selector);
   selectorRef.current = selector;
 
   const getSnapshot = useCallback(() => {
     const next = selectorRef.current(store.getState());
-    // 浅比较：如果结果相同则返回旧引用，防止不必要的重渲染
     if (Object.is(prevRef.current, next)) {
       return prevRef.current as T;
     }
@@ -53,7 +50,6 @@ export function useElapsedTime(startTime: number | null): number {
       return;
     }
 
-    // 立即计算一次
     setElapsed((Date.now() - startTime) / 1000);
 
     const timer = setInterval(() => {
@@ -65,3 +61,15 @@ export function useElapsedTime(startTime: number | null): number {
 
   return elapsed;
 }
+
+export { useAfterFirstRender } from './hooks/useAfterFirstRender.js';
+export { useTimeout } from './hooks/useTimeout.js';
+export { useMinDisplayTime } from './hooks/useMinDisplayTime.js';
+export { useBlink } from './hooks/useBlink.js';
+export { useTypeahead } from './hooks/useTypeahead.js';
+export { useInputBuffer } from './hooks/useInputBuffer.js';
+export { usePasteHandler } from './hooks/usePasteHandler.js';
+export { useSearchInput } from './hooks/useSearchInput.js';
+export { ArrowKeyHistory, useArrowKeyHistory } from './hooks/useArrowKeyHistory.js';
+export { useExitOnCtrlCD } from './hooks/useExitOnCtrlCD.js';
+export { useCommandKeybindings } from './hooks/useCommandKeybindings.js';

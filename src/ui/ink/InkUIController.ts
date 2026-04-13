@@ -1,5 +1,5 @@
 /**
- * InkUIController - 通过 AppStore 驱动 Ink UI
+ * InkUIController - 通过 AppStateStore 驱动 Ink UI
  *
  * 使用正交状态（loading/streaming/focus）替代互斥的 AppPhase。
  */
@@ -7,7 +7,19 @@
 import path from 'node:path';
 import type { UIController } from '../UIController.js';
 import type { AgentEvent } from '../../core/agentEvent.js';
-import type { AppStore } from './store.js';
+import type { AppStateStore } from './store.js';
+import {
+  addCompleted,
+  addCompletedAndReset,
+  setLoading,
+  setStreaming,
+  setFocus,
+
+  resetToInput,
+  addActiveToolUse,
+  updateActiveToolUse,
+  removeActiveToolUse,
+} from './store.js';
 import type { AskUserQuestionDef, AskUserQuestionResult } from './types.js';
 import { generateId } from './types.js';
 import type { TokenTracker } from '../../utils/tokenTracker.js';
@@ -17,25 +29,27 @@ import type { SessionListItem } from '../../services/session/sessionResume.js';
 import type { TaskListItem } from '../../services/session/taskList.js';
 
 /**
- * 基于 Ink + AppStore 的 UI 控制器实现
+ * 基于 Ink + AppStateStore 的 UI 控制器实现
  */
 export class InkUIController implements UIController {
-  private store: AppStore;
+  private store: AppStateStore;
   private tokenTracker?: TokenTracker;
   private toolInputById = new Map<string, Record<string, unknown>>();
   private hasMarkedStreaming = false;
+  private model?: string;
 
   // 流式文本批量 flush 相关
   private _streamFlushTimer: ReturnType<typeof setTimeout> | null = null;
   private _currentStreamText = '';
 
 
-  constructor(store: AppStore, tokenTracker?: TokenTracker) {
+  constructor(store: AppStateStore, tokenTracker?: TokenTracker, model?: string) {
     this.store = store;
     this.tokenTracker = tokenTracker;
+    this.model = model;
   }
 
-  getStore(): AppStore {
+  getStore(): AppStateStore {
     return this.store;
   }
 
@@ -126,10 +140,10 @@ export class InkUIController implements UIController {
         this._streamFlushTimer = null;
       }
       this._currentStreamText = '';
-      this.store.setStreaming(null);
+      setStreaming(this.store, null);
     }
 
-    this.store.setLoading({
+    setLoading(this.store, {
       mode: 'thinking',
       startTime: Date.now(),
       ...this._getTokenSnapshot(),
@@ -158,8 +172,8 @@ export class InkUIController implements UIController {
   private _flushStream(): void {
     this._streamFlushTimer = null;
     // 进入流式状态时清除 loading
-    this.store.setLoading(null);
-    this.store.setStreaming({ text: this._currentStreamText });
+    setLoading(this.store, null);
+    setStreaming(this.store, { text: this._currentStreamText });
   }
 
   clearStreamedText(_lineCount: number): void {
@@ -168,7 +182,7 @@ export class InkUIController implements UIController {
       clearTimeout(this._streamFlushTimer);
       this._streamFlushTimer = null;
     }
-    this.store.setStreaming(null);
+    setStreaming(this.store, null);
   }
 
   finalizeStream(fullText: string, _isMarkdown: boolean): void {
@@ -180,10 +194,11 @@ export class InkUIController implements UIController {
     this._currentStreamText = '';
 
     // 原子操作：同时添加完成项并清除流式状态
-    // 避免两次 setState 导致中间帧 Static 和 StreamingText 同时渲染
-    this.store.addCompletedAndReset({
+    addCompletedAndReset(this.store, {
       type: 'ai_message',
       text: fullText,
+      model: this.model,
+      timestamp: Date.now(),
     });
   }
 
@@ -193,10 +208,10 @@ export class InkUIController implements UIController {
       this.toolInputById.set(toolUseId, input);
     }
     // 工具进入队列后不再显示全局 spinner
-    this.store.setLoading(null);
+    setLoading(this.store, null);
     const exists = this.store.getState().activeToolUses.some((item) => item.toolUseId === toolUseId);
     if (exists) {
-      this.store.updateActiveToolUse(toolUseId, (item) => ({
+      updateActiveToolUse(this.store, toolUseId, (item) => ({
         ...item,
         name: toolName,
         detail: item.detail || detail,
@@ -204,7 +219,7 @@ export class InkUIController implements UIController {
       }));
       return;
     }
-    this.store.addActiveToolUse({
+    addActiveToolUse(this.store, {
       toolUseId,
       name: toolName,
       detail,
@@ -218,10 +233,10 @@ export class InkUIController implements UIController {
     if (input && !this.toolInputById.has(toolUseId)) {
       this.toolInputById.set(toolUseId, input);
     }
-    this.store.setLoading(null);
+    setLoading(this.store, null);
     const active = this.store.getState().activeToolUses.find((item) => item.toolUseId === toolUseId);
     if (!active) {
-      this.store.addActiveToolUse({
+      addActiveToolUse(this.store, {
         toolUseId,
         name: toolName,
         detail,
@@ -229,7 +244,7 @@ export class InkUIController implements UIController {
       });
       return;
     }
-    this.store.updateActiveToolUse(toolUseId, (item) => ({
+    updateActiveToolUse(this.store, toolUseId, (item) => ({
       ...item,
       name: toolName,
       detail: item.detail || detail,
@@ -239,11 +254,6 @@ export class InkUIController implements UIController {
 
   /**
    * 从工具输入中提取可读摘要
-   *
-   * Bash → command
-   * 文件操作 → file_path / path
-   * 搜索 → pattern / query
-   * 数组参数 → "N items"
    */
   private _summarizeToolInput(toolName: string, input: Record<string, unknown>): string {
     // Bash：显示命令
@@ -276,7 +286,7 @@ export class InkUIController implements UIController {
       }
     }
 
-    // 数组参数 → 显示数量（如 TodoWrite 的 todos）
+    // 数组参数 → 显示数量
     for (const [key, value] of Object.entries(input)) {
       if (Array.isArray(value)) {
         return `${value.length} ${key}`;
@@ -300,15 +310,14 @@ export class InkUIController implements UIController {
   }
 
   showToolResult(toolName: string, toolUseId: string, result: string, isError: boolean): void {
-    // 工具结束：移除活跃状态并追加静态记录
     const active = this.store.getState().activeToolUses.find(
       (item) => item.toolUseId === toolUseId
     );
     const toolInput = this.toolInputById.get(toolUseId);
     this.toolInputById.delete(toolUseId);
-    this.store.removeActiveToolUse(toolUseId);
+    removeActiveToolUse(this.store, toolUseId);
 
-    this.store.addCompleted({
+    addCompleted(this.store, {
       type: 'tool_use',
       toolUseId,
       name: toolName,
@@ -316,7 +325,7 @@ export class InkUIController implements UIController {
       status: isError ? 'error' : 'done',
     });
 
-    this.store.addCompleted({
+    addCompleted(this.store, {
       type: 'tool_result',
       toolUseId,
       name: toolName,
@@ -332,9 +341,8 @@ export class InkUIController implements UIController {
     reason?: string,
     options?: { commandPrefix?: string | null; commandInjectionDetected?: boolean }
   ): Promise<import('../../core/permissions.js').PermissionDecision> {
-    // 使用内联 focus 对话框替代独立 Ink 实例
     return new Promise((resolve) => {
-      this.store.setFocus({
+      setFocus(this.store, {
         type: 'permission',
         toolName,
         params,
@@ -342,8 +350,7 @@ export class InkUIController implements UIController {
         commandPrefix: options?.commandPrefix,
         commandInjectionDetected: options?.commandInjectionDetected,
         resolve: (result) => {
-          // 用户做出选择后，清除焦点
-          this.store.setFocus(undefined);
+          setFocus(this.store, undefined);
           resolve(result);
         },
       });
@@ -355,53 +362,44 @@ export class InkUIController implements UIController {
     initialAnswers?: Record<string, string>
   ): Promise<AskUserQuestionResult | null> {
     return new Promise((resolve) => {
-      this.store.setFocus({
+      setFocus(this.store, {
         type: 'question',
         questions,
         initialAnswers,
         resolve: (result) => {
-          this.store.setFocus(undefined);
+          setFocus(this.store, undefined);
           resolve(result);
         },
       });
     });
   }
 
-  /**
-   * 请求会话选择（/resume）
-   */
   async requestSessionResume(sessions: SessionListItem[]): Promise<number | null> {
     return new Promise((resolve) => {
-      this.store.setFocus({
+      setFocus(this.store, {
         type: 'session_selector',
         sessions,
         resolve: (result) => {
-          this.store.setFocus(undefined);
+          setFocus(this.store, undefined);
           resolve(result);
         },
       });
     });
   }
 
-  /**
-   * 请求任务选择（/tasks）
-   */
   async requestTaskManager(tasks: TaskListItem[]): Promise<{ action: 'output' | 'stop'; taskId: string } | null> {
     return new Promise((resolve) => {
-      this.store.setFocus({
+      setFocus(this.store, {
         type: 'task_selector',
         tasks,
         resolve: (result) => {
-          this.store.setFocus(undefined);
+          setFocus(this.store, undefined);
           resolve(result);
         },
       });
     });
   }
 
-  /**
-   * 直接记录命令触发的工具结果（不走 AgentEvent）
-   */
   showToolResultFromCommand(
     toolName: string,
     input: Record<string, unknown>,
@@ -413,14 +411,14 @@ export class InkUIController implements UIController {
     if (input) {
       this.toolInputById.set(toolUseId, input);
     }
-    this.store.addCompleted({
+    addCompleted(this.store, {
       type: 'tool_use',
       toolUseId,
       name: toolName,
       detail,
       status: isError ? 'error' : 'done',
     });
-    this.store.addCompleted({
+    addCompleted(this.store, {
       type: 'tool_result',
       toolUseId,
       name: toolName,
@@ -430,9 +428,6 @@ export class InkUIController implements UIController {
     });
   }
 
-  /**
-   * 用历史消息重新渲染 UI（用于恢复会话）
-   */
   hydrateHistory(messages: Message[]): void {
     const bannerItems = this.store.getState().completedItems.filter((item) => item.type === 'banner');
     const completedInputs = messages
@@ -454,9 +449,12 @@ export class InkUIController implements UIController {
     this.store.setState(() => ({
       completedItems: [...bannerItems, ...completed],
       activeToolUses: [],
+      theme: this.store.getState().theme,
       loading: null,
       streaming: null,
       focus: undefined,
+      tokenInfo: null,
+      contextTokenUsage: null,
     }));
   }
 
@@ -465,9 +463,13 @@ export class InkUIController implements UIController {
     if (this._isToolResultOnly(message.content)) return null;
     const text = this._messageContentToText(message.content);
     if (!text) return null;
+    // 保存完整 content blocks
+    const contentBlocks = typeof message.content === 'string'
+      ? [{ type: 'text' as const, text: message.content }]
+      : message.content;
     return message.role === 'user'
-      ? { type: 'user_message' as const, text }
-      : { type: 'ai_message' as const, text };
+      ? { type: 'user_message' as const, text, content: contentBlocks }
+      : { type: 'ai_message' as const, text, content: contentBlocks };
   }
 
   private _messageContentToText(content: string | ContentBlock[]): string {
@@ -486,7 +488,7 @@ export class InkUIController implements UIController {
   }
 
   showWarning(msg: string): void {
-    this.store.addCompleted({
+    addCompleted(this.store, {
       type: 'system',
       level: 'warning',
       text: msg,
@@ -494,7 +496,7 @@ export class InkUIController implements UIController {
   }
 
   showError(msg: string): void {
-    this.store.addCompleted({
+    addCompleted(this.store, {
       type: 'system',
       level: 'error',
       text: msg,
@@ -502,7 +504,7 @@ export class InkUIController implements UIController {
   }
 
   showInfo(msg: string): void {
-    this.store.addCompleted({
+    addCompleted(this.store, {
       type: 'system',
       level: 'info',
       text: msg,
@@ -510,7 +512,7 @@ export class InkUIController implements UIController {
   }
 
   showRetry(attempt: number, max: number, delay: number, error: string): void {
-    this.store.addCompleted({
+    addCompleted(this.store, {
       type: 'system',
       level: 'warning',
       text: `API 请求失败，${(delay / 1000).toFixed(1)}秒后重试 (${attempt}/${max})... [${error}]`,
@@ -519,11 +521,11 @@ export class InkUIController implements UIController {
 
   goToInput(): void {
     setRequestStatus({ kind: 'idle' });
-    this.store.resetToInput();
+    resetToInput(this.store);
   }
 
   addUserMessage(text: string): void {
-    this.store.addCompleted({
+    addCompleted(this.store, {
       type: 'user_message',
       text,
     });

@@ -8,7 +8,7 @@ export type { UIController } from './UIController.js';
 // Ink UI
 export { InkUIController } from './ink/InkUIController.js';
 export { App } from './ink/App.js';
-export type { BannerConfig, CompletedItem, AppPhase, CompletedItemInput } from './ink/types.js';
+export type { BannerConfig, CompletedItem, CompletedItemInput } from './ink/types.js';
 
 // 主题
 export { getTheme, setThemeByProvider, resetTheme, setTheme, getThemeName, getAvailableThemes, isAccessibilityMode } from './theme.js';

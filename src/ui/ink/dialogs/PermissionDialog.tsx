@@ -3,7 +3,7 @@
  */
 
 import { useCallback } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput } from '../primitives.js';
 import { Select, type SelectOption } from '../components/Select.js';
 import type { PermissionDecision } from '../../../core/permissions.js';
 

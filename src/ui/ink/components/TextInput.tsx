@@ -3,14 +3,13 @@
  */
 
 import React from 'react';
-import { Text, useInput } from 'ink';
+import { Text, useInput } from '../primitives.js';
 import chalk from 'chalk';
-import type { Key } from 'ink';
+import type { Key } from '../primitives.js';
 import { useTextInput } from '../hooks/useTextInput.js';
+import { usePasteHandler } from '../hooks/usePasteHandler.js';
 import { getTheme } from '../../theme.js';
 import {
-  normalizeLineEndings,
-  shouldTreatAsSpecialPaste,
   shouldAggregatePasteChunk,
 } from '../utils/paste.js';
 
@@ -128,14 +127,21 @@ export default function TextInput({
     buffer: string;
   }>({ mode: 'normal', incomplete: '', buffer: '' });
 
-  const flushBracketedPasteBuffer = (rawText: string) => {
-    const normalized = normalizeLineEndings(rawText);
-    if (onPaste && shouldTreatAsSpecialPaste(normalized)) {
-      Promise.resolve().then(() => onPaste(normalized));
-      return;
-    }
+  const { handlePaste } = usePasteHandler({
+    // 普通粘贴仍按文本输入处理，保持现有输入体验。
+    onTextPaste: (text) => {
+      onInput(text, {} as Key);
+    },
+    // 特殊粘贴（大段、多行）优先交给外部回调，例如后续的粘贴预览/确认框。
+    onSpecialPaste: onPaste
+      ? (text) => {
+          Promise.resolve().then(() => onPaste(text));
+        }
+      : undefined,
+  });
 
-    onInput(normalized, {} as Key);
+  const flushBracketedPasteBuffer = (rawText: string) => {
+    handlePaste(rawText);
   };
 
   const longestSuffixPrefix = (haystack: string, needle: string): number => {
@@ -249,7 +255,7 @@ export default function TextInput({
     return setTimeout(() => {
       setPasteState(({ chunks }) => {
         const pastedText = chunks.join('');
-        Promise.resolve().then(() => onPaste?.(pastedText));
+        handlePaste(pastedText);
         return { chunks: [], timeoutId: null };
       });
     }, 500);

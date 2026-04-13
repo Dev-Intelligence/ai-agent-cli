@@ -2,7 +2,7 @@
  * 任务选择器（/tasks）
  */
 
-import { Box, Text, useInput, useStdout } from 'ink';
+import { Box, Text, useInput } from '../primitives.js';
 import { useEffect, useMemo, useState } from 'react';
 import type { TaskListItem } from '../../../services/session/taskList.js';
 import { getInkColors } from '../../theme.js';
@@ -20,14 +20,13 @@ function formatElapsed(task: TaskListItem): string {
 
 export function TaskSelector({ tasks, onAction, onCancel }: TaskSelectorProps) {
   const colors = getInkColors();
-  const { stdout } = useStdout();
   const [size, setSize] = useState(() => ({
-    rows: stdout?.rows ?? 24,
-    columns: stdout?.columns ?? 80,
+    rows: process.stdout.rows ?? 24,
+    columns: process.stdout.columns ?? 80,
   }));
 
   useEffect(() => {
-    if (!stdout) return;
+    const stdout = process.stdout;
     const update = () => {
       setSize({
         rows: stdout.rows ?? 24,
@@ -39,7 +38,7 @@ export function TaskSelector({ tasks, onAction, onCancel }: TaskSelectorProps) {
     return () => {
       stdout.off('resize', update);
     };
-  }, [stdout]);
+  }, []);
 
   const [index, setIndex] = useState(0);
   const total = tasks.length;

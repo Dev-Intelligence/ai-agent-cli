@@ -2,12 +2,13 @@
  * StreamingText - 流式 AI 响应显示组件
  *
  * 两列布局：固定宽度 ● 前缀 + 自适应文本区域
- * 多行文本自动与首行文字对齐
+ * 使用 React 组件式 Markdown 渲染
  */
 
-import { Box, Text } from 'ink';
+import { Box, Text } from '../primitives.js';
 import { UI_SYMBOLS } from '../../../core/constants.js';
 import { getInkColors } from '../../theme.js';
+import { Markdown } from './markdown/Markdown.js';
 
 export interface StreamingTextProps {
   text: string;
@@ -22,7 +23,8 @@ export function StreamingText({ text }: StreamingTextProps) {
         <Text color={colors.secondary}>{UI_SYMBOLS.aiPrefix}</Text>
       </Box>
       <Box flexGrow={1} flexShrink={1}>
-        <Text>{text}<Text color={colors.cursor}>▊</Text></Text>
+        <Markdown>{text}</Markdown>
+        <Text color={colors.cursor}>▊</Text>
       </Box>
     </Box>
   );

@@ -11,6 +11,7 @@
  * 子元素直接暴露给父级 Box(column)，由 App.tsx 的根 Box 负责布局。
  */
 
+import { Box } from '../primitives.js';
 import type { FocusTarget, ActiveToolUse } from '../types.js';
 import { RequestStatusIndicator } from './RequestStatusIndicator.js';
 import type { TokenStatsSnapshot } from './EnhancedSpinner.js';
@@ -53,7 +54,7 @@ export function DynamicArea({
 
       {/* 活跃工具调用（非 Static，可动画） */}
       {activeToolUses.length > 0 && (
-        <>
+        <Box flexDirection="column" gap={1}>
           {activeToolUses.map((toolUse) => (
             <ToolUseView
               key={toolUse.toolUseId}
@@ -63,7 +64,7 @@ export function DynamicArea({
               animate={toolUse.status === 'running'}
             />
           ))}
-        </>
+        </Box>
       )}
 
       {/* 焦点驱动的对话框（互斥） */}

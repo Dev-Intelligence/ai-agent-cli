@@ -2,7 +2,7 @@
  * Select - 简化版选择列表
  */
 
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput } from '../primitives.js';
 import { useCallback, useState } from 'react';
 import { getInkColors } from '../../theme.js';
 

@@ -3,7 +3,7 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput } from '../primitives.js';
 import stringWidth from 'string-width';
 import { getInkColors } from '../../theme.js';
 import type { AskUserQuestionDef, AskUserQuestionResult } from '../types.js';

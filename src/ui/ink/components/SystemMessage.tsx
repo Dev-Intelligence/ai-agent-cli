@@ -4,7 +4,7 @@
  * 统一使用 ✱ 前缀，颜色按级别区分
  */
 
-import { Text } from 'ink';
+import { Text } from '../primitives.js';
 import { UI_SYMBOLS } from '../../../core/constants.js';
 import { isAccessibilityMode, getInkColors } from '../../theme.js';
 

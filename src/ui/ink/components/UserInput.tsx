@@ -2,14 +2,22 @@
  * UserInput - 用户输入组件
  */
 
-import { useCallback, useMemo, useState } from 'react';
-import { Box, Text } from 'ink';
-import { getInkColors } from '../../theme.js';
+import { useCallback } from 'react';
+import { Box, Text } from '../primitives.js';
 import { UI_SYMBOLS } from '../../../core/constants.js';
 import TextInput from './TextInput.js';
 import { useSlashCompletion } from '../hooks/useSlashCompletion.js';
-import { useStatusLine } from '../hooks/useStatusLine.js';
+import { useInputBuffer } from '../hooks/useInputBuffer.js';
+import {
+  ArrowKeyHistory,
+  useArrowKeyHistory,
+} from '../hooks/useArrowKeyHistory.js';
+import { useSetPromptOverlay } from '../context/promptOverlayContext.js';
 import type { SlashCommandItem } from '../completion/types.js';
+import { StatusLine } from './StatusLine.js';
+import type { TokenStatsSnapshot } from './EnhancedSpinner.js';
+import type { ContextTokenUsage } from '../types.js';
+import { Notifications } from './Notifications.js';
 
 export interface UserInputProps {
   prefix?: string;
@@ -17,66 +25,19 @@ export interface UserInputProps {
   onSubmit: (text: string) => void;
   onExit: () => void;
   tokenInfo?: string | null;
+  contextTokenUsage?: ContextTokenUsage | null;
+  modelName?: string;
+  provider?: string;
+  getTokenStats?: () => TokenStatsSnapshot;
 }
 
 /**
- * 命令历史记录
+ * 用户输入历史记录。
+ *
+ * 这里保留模块级实例，保证一次 CLI 会话内的多次渲染/重挂载
+ * 仍能共享同一份输入历史。
  */
-class CommandHistory {
-  private history: string[] = [];
-  private index = -1;
-  private maxSize: number;
-  private tempInput = '';
-
-  constructor(maxSize = 100) {
-    this.maxSize = maxSize;
-  }
-
-  add(command: string): void {
-    if (!command.trim()) return;
-    if (this.history[0] === command) return;
-    this.history.unshift(command);
-    if (this.history.length > this.maxSize) {
-      this.history.pop();
-    }
-    this.reset();
-  }
-
-  up(currentInput: string): string | null {
-    if (this.history.length === 0) return null;
-    if (this.index === -1) {
-      this.tempInput = currentInput;
-    }
-    if (this.index < this.history.length - 1) {
-      this.index++;
-      return this.history[this.index]!;
-    }
-    return null;
-  }
-
-  down(): string | null {
-    if (this.index > 0) {
-      this.index--;
-      return this.history[this.index]!;
-    } else if (this.index === 0) {
-      this.index = -1;
-      return this.tempInput;
-    }
-    return null;
-  }
-
-  reset(): void {
-    this.index = -1;
-    this.tempInput = '';
-  }
-
-  getAll(): string[] {
-    return [...this.history];
-  }
-}
-
-// 模块级命令历史实例（跨渲染保持）
-const commandHistory = new CommandHistory();
+const commandHistory = new ArrowKeyHistory();
 
 export function UserInput({
   prefix = '❯',
@@ -84,13 +45,21 @@ export function UserInput({
   onSubmit,
   onExit,
   tokenInfo,
+  contextTokenUsage,
+  modelName,
+  provider,
+  getTokenStats,
 }: UserInputProps) {
-  const [value, setValue] = useState('');
-  const [cursorOffset, setCursorOffset] = useState(0);
-  const colors = getInkColors();
+  const {
+    value,
+    cursorOffset,
+    setValue,
+    setCursorOffset,
+    replaceValue,
+    clear,
+  } = useInputBuffer();
 
   const columns = Math.max(10, (process.stdout.columns || 80) - 2);
-  const statusLine = useStatusLine();
 
   const {
     suggestions,
@@ -104,81 +73,72 @@ export function UserInput({
     commands: slashCommands,
   });
 
+  /**
+   * 将 slash 命令补全浮层注册到 PromptOverlayProvider。
+   * 真正的渲染交给 FullscreenLayout 顶层处理，避免输入区域被裁剪。
+   */
+  useSetPromptOverlay(
+    completionActive && suggestions.length > 0
+      ? {
+          suggestions: suggestions.map((suggestion) => ({
+            value: suggestion.value,
+            displayValue: suggestion.displayValue,
+          })),
+          selectedSuggestion: selectedIndex,
+          maxColumnWidth: Math.max(20, columns - 6),
+        }
+      : null
+  );
+
+  const {
+    handleHistoryUp,
+    handleHistoryDown,
+    addHistoryEntry,
+    resetHistoryNavigation,
+  } = useArrowKeyHistory({
+    history: commandHistory,
+    getCurrentInput: () => value,
+    applyInput: replaceValue,
+    onCursorOffsetChange: setCursorOffset,
+    disabled: completionActive,
+  });
+
   const handleSubmit = useCallback((text: string) => {
     if (completionActive && suggestions.length > 0) {
       return;
     }
     const trimmed = text.trim();
     if (trimmed) {
-      commandHistory.add(trimmed);
+      addHistoryEntry(trimmed);
     }
-    setValue('');
-    setCursorOffset(0);
+    clear();
     onSubmit(trimmed);
-  }, [completionActive, suggestions.length, onSubmit]);
+  }, [addHistoryEntry, clear, completionActive, suggestions.length, onSubmit]);
 
-  const handleHistoryUp = useCallback(() => {
-    if (completionActive) return;
-    const historyText = commandHistory.up(value);
-    if (historyText !== null) {
-      setValue(historyText);
-      setCursorOffset(historyText.length);
-    }
-  }, [completionActive, value]);
+  const rightStatusText = tokenInfo || null;
 
-  const handleHistoryDown = useCallback(() => {
-    if (completionActive) return;
-    const historyText = commandHistory.down();
-    if (historyText !== null) {
-      setValue(historyText);
-      setCursorOffset(historyText.length);
-    }
-  }, [completionActive]);
-
-  const renderedSuggestions = useMemo(() => {
-    if (!completionActive || suggestions.length === 0) return null;
-    return suggestions.map((suggestion, index) => {
-      const isSelected = index === selectedIndex;
-      return (
-        <Box key={`${suggestion.value}-${index}`}>
-          <Text color={isSelected ? colors.primary : undefined} dimColor={!isSelected}>
-            {isSelected ? '◆ ' : '  '}
-            {suggestion.displayValue}
-          </Text>
-        </Box>
-      );
-    });
-  }, [completionActive, suggestions, selectedIndex, colors.primary]);
-
-  const rightStatusText = useMemo(() => {
-    if (statusLine && tokenInfo) {
-      return `${statusLine} · ${tokenInfo}`;
-    }
-    return statusLine || tokenInfo || null;
-  }, [statusLine, tokenInfo]);
+  // 底部状态栏信息
+  const leftParts: string[] = [];
+  leftParts.push('Esc 取消', '↑↓ 历史', '/help');
+  const leftStatus = `${UI_SYMBOLS.statusBar} ${leftParts.join(' · ')}`;
 
   return (
     <Box flexDirection="column" marginTop={1}>
       <Text dimColor>{'─'.repeat((process.stdout.columns || 80) - 1)}</Text>
       <Box>
         <Box flexShrink={0} width={2}>
-          <Text color={colors.cursor} bold>{prefix}</Text>
+          <Text bold>{prefix}</Text>
         </Box>
         <Box flexGrow={1} flexShrink={1}>
           <TextInput
             multiline
             focus
             value={value}
-            onChange={(next) => {
-              setValue(next);
-              if (cursorOffset > next.length) {
-                setCursorOffset(next.length);
-              }
-            }}
+            onChange={setValue}
             onSubmit={handleSubmit}
             onHistoryUp={handleHistoryUp}
             onHistoryDown={handleHistoryDown}
-            onHistoryReset={() => commandHistory.reset()}
+            onHistoryReset={resetHistoryNavigation}
             onExit={onExit}
             columns={columns}
             cursorOffset={cursorOffset}
@@ -187,17 +147,15 @@ export function UserInput({
           />
         </Box>
       </Box>
-      {renderedSuggestions && (
-        <Box flexDirection="column" paddingLeft={2}>
-          {renderedSuggestions}
-          <Box marginTop={1}>
-            <Text dimColor>↑↓ 选择 · → 接受 · Tab 循环 · Esc 关闭</Text>
-          </Box>
-        </Box>
-      )}
       <Text dimColor>{'─'.repeat((process.stdout.columns || 80) - 1)}</Text>
+      <StatusLine
+        modelName={modelName}
+        provider={provider}
+        getTokenStats={getTokenStats}
+      />
+      <Notifications tokenUsage={contextTokenUsage || null} />
       <Box justifyContent="space-between" width={(process.stdout.columns || 80) - 1}>
-        <Text dimColor>{UI_SYMBOLS.statusBar} Esc 取消 · ↑↓ 历史 · /help</Text>
+        <Text dimColor>{leftStatus}</Text>
         {rightStatusText && <Text dimColor wrap="truncate-end">{rightStatusText}</Text>}
       </Box>
     </Box>

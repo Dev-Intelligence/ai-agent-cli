@@ -1,15 +1,14 @@
 /**
- * AppStore — 外部状态管理
+ * Store — 外部状态管理（函数式）
  *
- * 用 useSyncExternalStore 替代 React Context + bind() 回调，
- * 实现精确订阅和 React 外读写。
+ * 组件通过 useAppState(selector) 精确订阅。
  */
 
 import type {
-  AppPhase,
   CompletedItem,
   CompletedItemInput,
   BannerConfig,
+  ContextTokenUsage,
   LoadingState,
   StreamingState,
   FocusTarget,
@@ -18,165 +17,178 @@ import type {
 import { generateId } from './types.js';
 import type { Theme } from '../theme.js';
 
-/**
- * 应用状态
- */
+// ─── AppState ───
+
 export interface AppState {
-  /** @deprecated 由 loading/streaming/focus 替代 */
-  phase: AppPhase;
   completedItems: CompletedItem[];
   activeToolUses: ActiveToolUse[];
   theme: Theme;
   loading: LoadingState;
   streaming: StreamingState;
   focus: FocusTarget;
-  /** 输入框底部右侧的 token 使用信息 */
   tokenInfo: string | null;
+  contextTokenUsage: ContextTokenUsage | null;
+}
+
+// ─── Store 类型 ───
+
+type Listener = () => void;
+type OnChange<T> = (args: { newState: T; oldState: T }) => void;
+
+export type Store<T> = {
+  getState: () => T;
+  setState: (updater: (prev: T) => T) => void;
+  subscribe: (listener: Listener) => () => void;
+};
+
+export type AppStateStore = Store<AppState>;
+
+// ─── createStore ───
+
+export function createStore<T>(
+  initialState: T,
+  onChange?: OnChange<T>,
+): Store<T> {
+  let state = initialState;
+  const listeners = new Set<Listener>();
+
+  return {
+    getState: () => state,
+    setState: (updater: (prev: T) => T) => {
+      const prev = state;
+      const next = updater(prev);
+      if (Object.is(next, prev)) return;
+      state = next;
+      onChange?.({ newState: next, oldState: prev });
+      for (const listener of listeners) listener();
+    },
+    subscribe: (listener: Listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
+// ─── Action helpers（操作 AppStateStore）───
+
+export function addCompleted(store: AppStateStore, item: CompletedItemInput): string {
+  const fullItem = { ...item, id: generateId() } as CompletedItem;
+  store.setState((prev) => ({
+    ...prev,
+    completedItems: [...prev.completedItems, fullItem],
+  }));
+  return fullItem.id;
+}
+
+export function replaceLastCompleted(store: AppStateStore, item: CompletedItem): void {
+  store.setState((prev) => ({
+    ...prev,
+    completedItems: [...prev.completedItems.slice(0, -1), item],
+  }));
+}
+
+export function updateCompletedById(
+  store: AppStateStore,
+  id: string,
+  updater: (item: CompletedItem) => CompletedItem,
+): void {
+  store.setState((prev) => ({
+    ...prev,
+    completedItems: prev.completedItems.map((item) =>
+      item.id === id ? updater(item) : item,
+    ),
+  }));
+}
+
+export function setLoading(store: AppStateStore, loading: LoadingState): void {
+  store.setState((prev) => ({ ...prev, loading }));
+}
+
+export function setStreaming(store: AppStateStore, streaming: StreamingState): void {
+  store.setState((prev) => ({ ...prev, streaming }));
+}
+
+export function setFocus(store: AppStateStore, focus: FocusTarget): void {
+  store.setState((prev) => ({ ...prev, focus }));
+}
+
+export function setTokenInfo(store: AppStateStore, info: string | null): void {
+  store.setState((prev) => ({ ...prev, tokenInfo: info }));
+}
+
+export function setContextTokenUsage(
+  store: AppStateStore,
+  usage: ContextTokenUsage | null,
+): void {
+  store.setState((prev) => ({ ...prev, contextTokenUsage: usage }));
+}
+
+export function resetToInput(store: AppStateStore): void {
+  store.setState((prev) => ({
+    ...prev,
+    loading: null,
+    streaming: null,
+    focus: undefined,
+  }));
 }
 
 /**
- * 外部 Store — React 外可读写，组件通过 useSyncExternalStore 精确订阅
+ * 原子操作：添加完成项 + 清除所有动态状态
+ * 避免两次 setState 导致中间帧
  */
-export class AppStore {
-  private state: AppState;
-  private listeners = new Set<() => void>();
+export function addCompletedAndReset(store: AppStateStore, item: CompletedItemInput): void {
+  const fullItem = { ...item, id: generateId() } as CompletedItem;
+  store.setState((prev) => ({
+    ...prev,
+    completedItems: [...prev.completedItems, fullItem],
+    loading: null,
+    streaming: null,
+    focus: undefined,
+  }));
+}
 
-  constructor(initialState: AppState) {
-    this.state = initialState;
+export function addActiveToolUse(store: AppStateStore, toolUse: ActiveToolUse): void {
+  store.setState((prev) => ({
+    ...prev,
+    activeToolUses: [...prev.activeToolUses, toolUse],
+  }));
+}
+
+export function updateActiveToolUse(
+  store: AppStateStore,
+  toolUseId: string,
+  updater: (item: ActiveToolUse) => ActiveToolUse,
+): void {
+  store.setState((prev) => ({
+    ...prev,
+    activeToolUses: prev.activeToolUses.map((item) =>
+      item.toolUseId === toolUseId ? updater(item) : item,
+    ),
+  }));
+}
+
+export function removeActiveToolUse(store: AppStateStore, toolUseId: string): void {
+  store.setState((prev) => ({
+    ...prev,
+    activeToolUses: prev.activeToolUses.filter((item) => item.toolUseId !== toolUseId),
+  }));
+}
+
+// ─── 初始状态 ───
+
+export function createInitialAppState(theme: Theme, bannerConfig?: BannerConfig): AppState {
+  const completedItems: CompletedItem[] = [];
+  if (bannerConfig) {
+    completedItems.push({ id: generateId(), type: 'banner' as const, config: bannerConfig });
   }
-
-  getState(): AppState {
-    return this.state;
-  }
-
-  setState(updater: (prev: AppState) => Partial<AppState>): void {
-    const partial = updater(this.state);
-    this.state = { ...this.state, ...partial };
-    this.listeners.forEach((l) => l());
-  }
-
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  // ─── 便捷方法 ───
-
-  /** @deprecated 使用 setLoading/setStreaming/setFocus 替代 */
-  setPhase(phase: AppPhase): void {
-    this.setState(() => ({ phase }));
-  }
-
-  addCompleted(item: CompletedItemInput): string {
-    const fullItem = { ...item, id: generateId() } as CompletedItem;
-    this.setState((prev) => ({
-      completedItems: [...prev.completedItems, fullItem],
-    }));
-    return fullItem.id;
-  }
-
-  /**
-   * 替换最后一个 completed item（用于工具调用合并）
-   */
-  replaceLastCompleted(item: CompletedItem): void {
-    this.setState((prev) => ({
-      completedItems: [...prev.completedItems.slice(0, -1), item],
-    }));
-  }
-
-  updateCompletedById(id: string, updater: (item: CompletedItem) => CompletedItem): void {
-    this.setState((prev) => ({
-      completedItems: prev.completedItems.map((item) =>
-        item.id === id ? updater(item) : item
-      ),
-    }));
-  }
-
-  // ─── 正交状态操作 ───
-
-  setLoading(loading: LoadingState): void {
-    this.setState(() => ({ loading }));
-  }
-
-  setStreaming(streaming: StreamingState): void {
-    this.setState(() => ({ streaming }));
-  }
-
-  setFocus(focus: FocusTarget): void {
-    this.setState(() => ({ focus }));
-  }
-
-  setTokenInfo(info: string | null): void {
-    this.setState(() => ({ tokenInfo: info }));
-  }
-
-  /** 清除所有动态状态回到输入模式 */
-  resetToInput(): void {
-    this.setState(() => ({
-      phase: { type: 'input' as const },
-      loading: null,
-      streaming: null,
-      focus: undefined,
-    }));
-  }
-
-  /**
-   * 原子操作：添加完成项 + 清除所有动态状态
-   *
-   * 避免 addCompleted + resetToInput 两次 setState 导致中间渲染帧
-   * （Ink Static 会在第一帧永久写入终端，第二帧才清除 StreamingText，
-   * 造成同一内容同时以渲染后和原始文本双重显示）
-   */
-  addCompletedAndReset(item: CompletedItemInput): void {
-    const fullItem = { ...item, id: generateId() } as CompletedItem;
-    this.setState((prev) => ({
-      completedItems: [...prev.completedItems, fullItem],
-      phase: { type: 'input' as const },
-      loading: null,
-      streaming: null,
-      focus: undefined,
-    }));
-  }
-
-  // ─── 活跃工具调用 ───
-
-  addActiveToolUse(toolUse: ActiveToolUse): void {
-    this.setState((prev) => ({
-      activeToolUses: [...prev.activeToolUses, toolUse],
-    }));
-  }
-
-  updateActiveToolUse(toolUseId: string, updater: (item: ActiveToolUse) => ActiveToolUse): void {
-    this.setState((prev) => ({
-      activeToolUses: prev.activeToolUses.map((item) =>
-        item.toolUseId === toolUseId ? updater(item) : item
-      ),
-    }));
-  }
-
-  removeActiveToolUse(toolUseId: string): void {
-    this.setState((prev) => ({
-      activeToolUses: prev.activeToolUses.filter((item) => item.toolUseId !== toolUseId),
-    }));
-  }
-
-  /**
-   * 创建带 banner 的初始状态
-   */
-  static createInitialState(theme: Theme, bannerConfig?: BannerConfig): AppState {
-    const completedItems: CompletedItem[] = [];
-    if (bannerConfig) {
-      completedItems.push({ id: generateId(), type: 'banner' as const, config: bannerConfig });
-    }
-    return {
-      phase: { type: 'input' },
-      completedItems,
-      activeToolUses: [],
-      theme,
-      loading: null,
-      streaming: null,
-      focus: undefined,
-      tokenInfo: null,
-    };
-  }
+  return {
+    completedItems,
+    activeToolUses: [],
+    theme,
+    loading: null,
+    streaming: null,
+    focus: undefined,
+    tokenInfo: null,
+    contextTokenUsage: null,
+  };
 }

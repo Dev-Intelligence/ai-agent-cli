@@ -2,7 +2,7 @@
  * useCancelRequest - ESC/Ctrl+C 中断请求
  */
 
-import { useInput } from 'ink';
+import { useInput } from '../primitives.js';
 import type { FocusTarget } from '../types.js';
 
 export interface UseCancelRequestOptions {

@@ -3,17 +3,17 @@
  */
 
 import { createElement } from 'react';
-import { render } from 'ink';
+import { render } from '../primitives.js';
 import { PermissionDialog } from './PermissionDialog.js';
 import type { PermissionDecision } from '../../../core/permissions.js';
 
-export function renderPermissionDialog(
+export async function renderPermissionDialog(
   toolName: string,
   params: Record<string, unknown>,
   reason?: string
 ): Promise<PermissionDecision> {
-  return new Promise((resolve) => {
-    const { unmount } = render(
+  return new Promise(async (resolve) => {
+    const { unmount } = await render(
       createElement(PermissionDialog, {
         toolName,
         params,

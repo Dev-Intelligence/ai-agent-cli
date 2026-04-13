@@ -1,12 +1,24 @@
 /**
- * PermissionPrompt - 权限确认组件
+ * PermissionPrompt - 权限确认组件（分发体系）
+ *
+ * 按 toolName 分发到不同的内容预览区：
+ * - bash → 语法高亮命令预览
+ * - edit_file → diff 预览（StructuredDiffList）
+ * - write_file → 文件路径 + 内容预览
+ * - 其他 → JSON 参数摘要
+ *
+ * 选项逻辑统一在顶层组件中处理。
  */
 
 import path from 'node:path';
 import { useCallback, useMemo } from 'react';
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput } from '../primitives.js';
 import { Select, type SelectOption } from './Select.js';
 import { getInkColors } from '../../theme.js';
+import { HighlightedCode } from './HighlightedCode.js';
+import { StructuredDiffList } from './StructuredDiff/index.js';
+import { getPatchFromContents } from '../../../utils/diff.js';
+import { getToolDisplayName } from './ToolUseView.js';
 import type { PermissionDecision } from '../../../core/permissions.js';
 
 export interface PermissionPromptProps {
@@ -136,7 +148,7 @@ export function PermissionPrompt({
   onResolve,
 }: PermissionPromptProps) {
   const colors = getInkColors();
-  const message = formatToolMessage(toolName, params);
+  const displayName = getToolDisplayName(toolName);
 
   const { options, defaultValue, extra } = useMemo(
     () => buildOptions(toolName, params, commandPrefix, commandInjectionDetected),
@@ -199,13 +211,13 @@ export function PermissionPrompt({
       paddingBottom={1}
     >
       <Text bold color={colors.warning}>
-        {toolName === 'bash' ? 'Bash command' : 'Tool use'}
+        ⏺ {displayName}
       </Text>
-      <Box flexDirection="column" paddingX={2} paddingY={1}>
-        <Text>
-          {toolName}({message})
-        </Text>
-        {reason && <Text color={colors.textDim}>{reason}</Text>}
+
+      {/* 按工具类型分发内容预览区 */}
+      <Box flexDirection="column" paddingX={1} paddingY={1}>
+        <PermissionPreview toolName={toolName} params={params} />
+        {reason && <Text color={colors.textDim} dimColor>{reason}</Text>}
       </Box>
 
       <Box flexDirection="column">
@@ -218,4 +230,97 @@ export function PermissionPrompt({
       </Box>
     </Box>
   );
+}
+
+// ─── 权限预览分发 ───
+
+function PermissionPreview({ toolName, params }: { toolName: string; params: Record<string, unknown> }) {
+  const n = toolName.toLowerCase();
+
+  // bash → 语法高亮命令
+  if (n === 'bash') {
+    return <HighlightedCode code={String(params.command || '')} language="bash" />;
+  }
+
+  // edit_file → diff 预览
+  if (n === 'edit_file' || n === 'edit' || n === 'fileedittool' || n === 'str_replace_based_edit_tool') {
+    return <EditPermissionPreview params={params} />;
+  }
+
+  // write_file → 文件路径 + 内容片段
+  if (n === 'write_file' || n === 'write' || n === 'filewritetool' || n === 'create_file') {
+    return <WritePermissionPreview params={params} />;
+  }
+
+  // 默认 → 参数摘要
+  const message = formatToolMessage(toolName, params);
+  return <Text>{message}</Text>;
+}
+
+// ─── edit_file diff 预览 ───
+
+function EditPermissionPreview({ params }: { params: Record<string, unknown> }) {
+  const oldStr = typeof params.old_string === 'string' ? params.old_string : '';
+  const newStr = typeof params.new_string === 'string' ? params.new_string : '';
+  const filePath = String(params.file_path || params.path || '');
+  const displayPath = filePath ? formatRelativePath(filePath) : '';
+
+  if (!oldStr && !newStr) {
+    return <Text dimColor>{displayPath || 'No changes'}</Text>;
+  }
+
+  const hunks = getPatchFromContents({
+    filePath: filePath || 'file',
+    oldContent: oldStr,
+    newContent: newStr,
+  });
+
+  const width = Math.max(40, (process.stdout.columns || 80) - 16);
+
+  return (
+    <Box flexDirection="column">
+      {displayPath && <Text dimColor>{displayPath}</Text>}
+      {hunks.length > 0 ? (
+        <StructuredDiffList hunks={hunks} filePath={filePath} width={width} />
+      ) : (
+        <Text dimColor>(无差异)</Text>
+      )}
+    </Box>
+  );
+}
+
+// ─── write_file 内容预览 ───
+
+function WritePermissionPreview({ params }: { params: Record<string, unknown> }) {
+  const filePath = String(params.file_path || params.path || '');
+  const content = typeof params.content === 'string' ? params.content : '';
+  const displayPath = filePath ? formatRelativePath(filePath) : '';
+  const lines = content.split('\n');
+  const preview = lines.slice(0, 5).join('\n');
+  const extra = lines.length - 5;
+
+  return (
+    <Box flexDirection="column">
+      {displayPath && <Text bold>{displayPath}</Text>}
+      {content && (
+        <Box flexDirection="column">
+          <Text dimColor>{preview}</Text>
+          {extra > 0 && <Text dimColor>... (+{extra} lines)</Text>}
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+// ─── 辅助函数 ───
+
+function formatRelativePath(raw: string): string {
+  const cwd = process.cwd();
+  if (path.isAbsolute(raw)) {
+    const rel = path.relative(cwd, raw);
+    if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+      return rel;
+    }
+  }
+  return raw;
 }
