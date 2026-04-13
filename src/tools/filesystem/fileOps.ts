@@ -662,6 +662,14 @@ export async function runWrite(
     const originalFile = exists ? await fs.readFile(fullPath, 'utf-8') : null;
 
     await fs.ensureDir(path.dirname(fullPath));
+
+    // 覆盖已有文件前备份
+    if (exists) {
+      const { backupFileBeforeEdit, createSnapshot } = await import('../../utils/fileHistory.js');
+      const backup = backupFileBeforeEdit(fullPath);
+      if (backup) createSnapshot([backup]);
+    }
+
     await fs.writeFile(fullPath, content, 'utf-8');
 
     const result = buildWriteResult(filePath, originalFile, content);
@@ -706,18 +714,29 @@ export async function runEdit(
 
     const content = await fs.readFile(fullPath, 'utf-8');
 
-    if (!content.includes(oldString)) {
+    // 模糊匹配：先精确匹配，失败后尝试引号归一化 + 尾部空白归一化
+    const { findActualString } = await import('../../utils/editUtils.js');
+    const actualString = findActualString(content, oldString);
+
+    if (!actualString) {
       return buildError(`错误: 在文件中未找到要替换的文本。请确保 old_string 精确匹配。\n文件前100字符: ${content.slice(0, 100)}...`);
     }
 
-    const matches = content.split(oldString).length - 1;
+    // 使用实际匹配到的字符串进行替换（可能是弯引号版本）
+    const effectiveOld = actualString;
+    const matches = content.split(effectiveOld).length - 1;
     if (matches > 1 && !replaceAll) {
       return buildError(`错误: old_string 在文件中出现 ${matches} 次。请提供更具体的文本以确保唯一匹配，或使用 replace_all 参数替换所有匹配。`);
     }
 
     const updated = replaceAll
-      ? content.replaceAll(oldString, newString)
-      : content.replace(oldString, newString);
+      ? content.replaceAll(effectiveOld, newString)
+      : content.replace(effectiveOld, newString);
+
+    // 编辑前备份（用于撤销）
+    const { backupFileBeforeEdit, createSnapshot } = await import('../../utils/fileHistory.js');
+    const backup = backupFileBeforeEdit(fullPath);
+    if (backup) createSnapshot([backup]);
 
     await fs.writeFile(fullPath, updated, 'utf-8');
 

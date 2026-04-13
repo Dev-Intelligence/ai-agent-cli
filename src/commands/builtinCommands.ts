@@ -658,6 +658,202 @@ function renderTasksAsText(tasks: TaskListItem[]): string {
   return lines.join('\n');
 }
 
+// ─── /doctor 诊断命令 ───
+
+const doctorCommand: SlashCommand = {
+  name: 'doctor',
+  description: '运行诊断检查',
+  execute: async (_args, context) => {
+    const lines: string[] = ['诊断检查:', ''];
+
+    // Node.js 版本
+    lines.push(`✓ Node.js ${process.version}`);
+    lines.push(`✓ 平台: ${process.platform} ${process.arch}`);
+
+    // Provider / Model
+    const provider = context.config.provider;
+    const model = context.config.model;
+    const modelDisplay = getModelDisplayName(model);
+    lines.push(`✓ Provider: ${provider}`);
+    lines.push(`✓ Model: ${modelDisplay}`);
+
+    // API Key
+    const hasKey = Boolean(context.config.apiKey);
+    lines.push(hasKey ? '✓ API Key: 已配置' : '✗ API Key: 未配置');
+
+    // Base URL
+    if (context.config.baseUrl) {
+      lines.push(`✓ Base URL: ${context.config.baseUrl}`);
+    }
+
+    // 上下文窗口
+    const contextLength = getModelContextLength(provider, model);
+    lines.push(`✓ 上下文窗口: ${(contextLength / 1000).toFixed(0)}k tokens`);
+
+    // 工作目录
+    lines.push(`✓ 工作目录: ${context.workdir}`);
+
+    // 配置文件
+    const configDir = join(process.env['HOME'] || '~', '.ai-agent-cli');
+    lines.push(`✓ 配置目录: ${configDir}`);
+
+    // 内存
+    const mem = process.memoryUsage();
+    lines.push(`✓ 内存使用: ${(mem.heapUsed / 1024 / 1024).toFixed(1)} MB / ${(mem.heapTotal / 1024 / 1024).toFixed(1)} MB`);
+
+    // MCP 服务器
+    try {
+      const mcpConfig = join(configDir, 'mcp.json');
+      const { readFileSync } = await import('node:fs');
+      const mcpData = JSON.parse(readFileSync(mcpConfig, 'utf-8'));
+      const serverCount = Object.keys(mcpData.mcpServers || {}).length;
+      lines.push(serverCount > 0
+        ? `✓ MCP 服务器: ${serverCount} 个已配置`
+        : '○ MCP 服务器: 未配置');
+    } catch {
+      lines.push('○ MCP 服务器: 未配置');
+    }
+
+    lines.push('', `${PRODUCT_NAME} v${VERSION}`);
+    return lines.join('\n');
+  },
+};
+
+// ─── /memory 记忆管理命令 ───
+
+const memoryCommand: SlashCommand = {
+  name: 'memory',
+  description: '查看/管理项目记忆文件',
+  execute: async (args, context) => {
+    const { readdirSync, readFileSync, rmSync, existsSync, mkdirSync } = await import('node:fs');
+
+    const memoryDir = join(context.workdir, '.ai-agent', 'memory');
+
+    if (!existsSync(memoryDir)) {
+      mkdirSync(memoryDir, { recursive: true });
+    }
+
+    const subcommand = args.trim().split(/\s+/)[0] || '';
+    const rest = args.trim().slice(subcommand.length).trim();
+
+    if (subcommand === 'clear') {
+      const files = readdirSync(memoryDir).filter((f: string) => f.endsWith('.md'));
+      for (const f of files) {
+        rmSync(join(memoryDir, f));
+      }
+      return `已清除 ${files.length} 个记忆文件。`;
+    }
+
+    if (subcommand === 'show' && rest) {
+      const filePath = join(memoryDir, rest.endsWith('.md') ? rest : `${rest}.md`);
+      if (!existsSync(filePath)) {
+        return `记忆文件不存在: ${rest}`;
+      }
+      return readFileSync(filePath, 'utf-8');
+    }
+
+    // 默认：列出所有记忆
+    const files = existsSync(memoryDir)
+      ? readdirSync(memoryDir).filter((f: string) => f.endsWith('.md'))
+      : [];
+
+    if (files.length === 0) {
+      return '暂无记忆文件。\n\n提示: AI 助手会在对话中自动创建记忆文件到 .ai-agent/memory/';
+    }
+
+    const lines = ['项目记忆文件:', ''];
+    for (const f of files) {
+      const content = readFileSync(join(memoryDir, f), 'utf-8');
+      const firstLine = content.split('\n').find((l: string) => l.trim()) || '(空)';
+      lines.push(`  ${f.replace('.md', '')} — ${firstLine.slice(0, 60)}`);
+    }
+    lines.push('', '用法: /memory show <name> | /memory clear');
+    return lines.join('\n');
+  },
+};
+
+// ─── /model set 命令 ───
+
+const modelSetCommand: SlashCommand = {
+  name: 'model set',
+  description: '切换模型',
+  execute: async (args, context) => {
+    const newModel = args.trim();
+    if (!newModel) {
+      return '用法: /model set <model-name>\n例如: /model set gpt-4o';
+    }
+    // 更新配置
+    const userConfig = getEffectiveUserConfig(context);
+    userConfig.model = newModel;
+    const { saveUserConfig } = await import('../services/config/configStore.js');
+    saveUserConfig(userConfig);
+    const display = getModelDisplayName(newModel);
+    return `模型已切换为: ${display}\n注意: 需要重启 CLI 生效。`;
+  },
+};
+
+// ─── /mcp 命令 ───
+
+const mcpCommand: SlashCommand = {
+  name: 'mcp',
+  description: '查看 MCP 服务器状态',
+  execute: async (_args, context) => {
+    const { readFileSync, existsSync } = await import('node:fs');
+    const configPaths = [
+      join(context.workdir, '.ai-agent-cli', 'mcp.json'),
+      join(context.workdir, '.ai-agent', 'mcp.json'),
+      join(process.env['HOME'] || '~', '.ai-agent-cli', 'mcp.json'),
+    ];
+
+    let config: { mcpServers?: Record<string, { command?: string; enabled?: boolean }> } | null = null;
+    let configPath = '';
+    for (const p of configPaths) {
+      if (existsSync(p)) {
+        try {
+          config = JSON.parse(readFileSync(p, 'utf-8'));
+          configPath = p;
+          break;
+        } catch { /* ignore */ }
+      }
+    }
+
+    if (!config?.mcpServers || Object.keys(config.mcpServers).length === 0) {
+      return 'MCP 服务器: 未配置\n\n提示: 在 .ai-agent-cli/mcp.json 中配置 MCP 服务器。';
+    }
+
+    const lines = ['MCP 服务器:', ''];
+    for (const [name, server] of Object.entries(config.mcpServers)) {
+      const enabled = server.enabled !== false;
+      const status = enabled ? '✓' : '○';
+      const cmd = server.command || '(未设置命令)';
+      lines.push(`  ${status} ${name} — ${cmd}`);
+    }
+    lines.push('', `配置文件: ${configPath}`);
+    return lines.join('\n');
+  },
+};
+
+// ─── /vim 命令（骨架） ───
+
+const vimCommand: SlashCommand = {
+  name: 'vim',
+  description: '切换 Vim 模式（开发中）',
+  execute: async () => {
+    return [
+      'Vim 模式 (开发中)',
+      '',
+      '计划支持的功能:',
+      '  - Normal/Insert/Visual 模式切换',
+      '  - h/j/k/l 光标移动',
+      '  - dd/yy/p 行操作',
+      '  - /pattern 搜索',
+      '  - :w 保存 / :q 退出',
+      '',
+      '当前状态: 未实现',
+    ].join('\n');
+  },
+};
+
 /**
  * 获取所有内置命令
  */
@@ -684,5 +880,10 @@ export function getBuiltinCommands(): SlashCommand[] {
     themeCommand,
     statuslineCommand,
     tasksCommand,
+    doctorCommand,
+    memoryCommand,
+    modelSetCommand,
+    mcpCommand,
+    vimCommand,
   ];
 }

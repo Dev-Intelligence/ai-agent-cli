@@ -3,7 +3,7 @@
  */
 
 import { createElement } from 'react';
-import { render } from 'ink';
+import { render } from '../ui/ink/primitives.js';
 import { Config } from '../services/config/Config.js';
 import { loadUserConfig } from '../services/config/configStore.js';
 import { runSetupWizard } from '../services/config/setup.js';
@@ -14,7 +14,8 @@ import { getAllTools } from '../tools/definitions.js';
 import { createSystemPrompt, getAgentDescriptions } from '../core/prompts.js';
 import { agentLoop } from '../core/loop.js';
 import { setThemeByProvider, getTheme, PRODUCT_NAME } from '../ui/index.js';
-import { AppStore } from '../ui/ink/store.js';
+import { createStore, createInitialAppState, setContextTokenUsage, setTokenInfo } from '../ui/ink/store.js';
+import type { AppState } from '../ui/ink/store.js';
 import { InkUIController } from '../ui/ink/InkUIController.js';
 import { App } from '../ui/ink/App.js';
 import { getInputHistory } from '../ui/ink/components/UserInput.js';
@@ -201,16 +202,16 @@ async function main(): Promise<void> {
       providerDisplayName: config.getProviderDisplayName(),
       model: config.model,
       workdir: config.workdir,
+      projectFile: config.projectFile,
       skills: skillLoader.listSkills(),
       agentTypes: getAgentTypeNames(),
     };
 
-    // 17. 创建 AppStore（外部状态管理）
-    const store = AppStore.createInitialState(getTheme(), bannerConfig);
-    const appStore = new AppStore(store);
+    // 17. 创建 AppStateStore（外部状态管理）
+    const appStore = createStore<AppState>(createInitialAppState(getTheme(), bannerConfig));
 
     // 18. 创建 Ink UI 控制器（注入 store）
-    const inkController = new InkUIController(appStore, tokenTracker);
+    const inkController = new InkUIController(appStore, tokenTracker, config.model);
 
     // 19. 获取 Reminder 管理器
     const reminderManager = getReminderManager();
@@ -218,6 +219,33 @@ async function main(): Promise<void> {
 
     // 20. 对话历史
     const history: Message[] = [];
+
+    /**
+     * 同步输入区底部 token 文本与 Prompt 告警所需的数值状态
+     */
+    const updateContextTokenState = (messages: Message[]): void => {
+      if (messages.length === 0) {
+        setTokenInfo(appStore, null);
+        setContextTokenUsage(appStore, null);
+        return;
+      }
+
+      const currentTokens = countTokensFromUsage(messages);
+      const percentage = getTokenPercentage(currentTokens, modelContextLength);
+      const modelDisplay = getModelDisplayName(config.model);
+      const cacheUsage = getCacheTokensFromUsage(messages);
+      const cacheText = cacheUsage.total > 0
+        ? ` · cache r:${formatTokenCount(cacheUsage.cacheReadTokens)} c:${formatTokenCount(cacheUsage.cacheCreationTokens)}`
+        : '';
+      const tokenInfo = `[${config.provider}] ${modelDisplay}: ${formatTokenCount(currentTokens)}/${formatTokenCount(modelContextLength)} (${percentage}%)${cacheText}`;
+
+      setTokenInfo(appStore, tokenInfo);
+      setContextTokenUsage(appStore, {
+        currentTokens,
+        maxTokens: modelContextLength,
+        percentage,
+      });
+    };
 
     const resumeSession = async (identifier?: string): Promise<string | void> => {
       const cwd = config.workdir;
@@ -246,15 +274,7 @@ async function main(): Promise<void> {
       tokenTracker?.reset();
       inkController.hydrateHistory(messages);
       if (messages.length > 0) {
-        const currentTokens = countTokensFromUsage(messages);
-        const percentage = getTokenPercentage(currentTokens, modelContextLength);
-        const modelDisplay = getModelDisplayName(config.model);
-        const cacheUsage = getCacheTokensFromUsage(messages);
-        const cacheText = cacheUsage.total > 0
-          ? ` · cache r:${formatTokenCount(cacheUsage.cacheReadTokens)} c:${formatTokenCount(cacheUsage.cacheCreationTokens)}`
-          : '';
-        const tokenInfo = `[${config.provider}] ${modelDisplay}: ${formatTokenCount(currentTokens)}/${formatTokenCount(modelContextLength)} (${percentage}%)${cacheText}`;
-        appStore.setTokenInfo(tokenInfo);
+        updateContextTokenState(messages);
       }
       return `已恢复会话: ${resolved.sessionId}`;
       }
@@ -284,15 +304,7 @@ async function main(): Promise<void> {
       tokenTracker?.reset();
       inkController.hydrateHistory(messages);
       if (messages.length > 0) {
-        const currentTokens = countTokensFromUsage(messages);
-        const percentage = getTokenPercentage(currentTokens, modelContextLength);
-        const modelDisplay = getModelDisplayName(config.model);
-        const cacheUsage = getCacheTokensFromUsage(messages);
-        const cacheText = cacheUsage.total > 0
-          ? ` · cache r:${formatTokenCount(cacheUsage.cacheReadTokens)} c:${formatTokenCount(cacheUsage.cacheCreationTokens)}`
-          : '';
-        const tokenInfo = `[${config.provider}] ${modelDisplay}: ${formatTokenCount(currentTokens)}/${formatTokenCount(modelContextLength)} (${percentage}%)${cacheText}`;
-        appStore.setTokenInfo(tokenInfo);
+        updateContextTokenState(messages);
       }
       return `已恢复会话: ${selected.sessionId}`;
     };
@@ -339,15 +351,7 @@ async function main(): Promise<void> {
 
         // 更新输入框底部 Token 使用信息
         if (history.length > 0) {
-          const currentTokens = countTokensFromUsage(history);
-          const percentage = getTokenPercentage(currentTokens, modelContextLength);
-          const modelDisplay = getModelDisplayName(config.model);
-          const cacheUsage = getCacheTokensFromUsage(history);
-          const cacheText = cacheUsage.total > 0
-            ? ` · cache r:${formatTokenCount(cacheUsage.cacheReadTokens)} c:${formatTokenCount(cacheUsage.cacheCreationTokens)}`
-            : '';
-          const tokenInfo = `[${config.provider}] ${modelDisplay}: ${formatTokenCount(currentTokens)}/${formatTokenCount(modelContextLength)} (${percentage}%)${cacheText}`;
-          appStore.setTokenInfo(tokenInfo);
+          updateContextTokenState(history);
         }
 
         // UserPromptSubmit Hook
@@ -483,6 +487,7 @@ async function main(): Promise<void> {
         // 更新历史
         history.length = 0;
         history.push(...newHistory);
+        updateContextTokenState(history);
 
         // 显示响应耗时
         const elapsed = (Date.now() - startTime) / 1000;
@@ -502,6 +507,7 @@ async function main(): Promise<void> {
         if (history.length > 0 && history[history.length - 1].role === 'user') {
           history.pop();
         }
+        updateContextTokenState(history);
       } finally {
         // 确保回到输入阶段
         inkController.goToInput();
@@ -562,19 +568,21 @@ async function main(): Promise<void> {
     restoreConsole = patchConsole(appStore);
 
     // 25. 渲染 Ink 应用（传入 store 而非 controller）
-    const { waitUntilExit, unmount } = render(
+    const { waitUntilExit, unmount } = await render(
       createElement(App, {
         store: appStore,
         onInput: handleUserInput,
         onExit: handleExit,
         onInterrupt: handleInterrupt,
         slashCommands,
+        modelName: config.model,
+        provider: config.provider,
         getTokenStats: () => {
           const stats = tokenTracker.getStats();
           return { totalTokens: stats.totalTokens, totalCost: stats.totalCost };
         },
       }),
-      { exitOnCtrlC: false }
+      { exitOnCtrlC: false, patchConsole: false }
     );
     unmountInk = unmount;
     interruptHandler = handleInterrupt;
