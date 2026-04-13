@@ -129,7 +129,7 @@ export const TOOL_ICONS: Record<string, string> = {};
  */
 export const DEFAULT_ICON = '●';
 
-/** Claude Code 风格 UI 符号 */
+/**  UI 符号 */
 export const UI_SYMBOLS = {
   aiPrefix: '●',        // AI 消息前缀
   userPrefix: '❯',      // 用户消息/输入前缀

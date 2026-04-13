@@ -8,6 +8,7 @@ import type { ProtocolAdapter } from '../services/ai/adapters/base.js';
 import { toolResultContentToText } from './toolResult.js';
 import { generateUuid } from '../utils/uuid.js';
 import { loadPromptWithVars } from '../services/promptLoader.js';
+import { getAutoCompactThreshold, getEffectiveContextWindowSize } from '../services/compact/autoCompact.js';
 
 /**
  * 压缩配置
@@ -54,6 +55,12 @@ export class ContextCompressor {
   private modelContextLength: number;
   private config: CompactionConfig;
 
+  // ─── Circuit Breaker（断路器）───
+  /** 连续压缩失败次数 */
+  private consecutiveFailures = 0;
+  /** 最大连续失败次数，超过后停止自动压缩 */
+  private static readonly MAX_CONSECUTIVE_FAILURES = 3;
+
   constructor(
     adapter: ProtocolAdapter,
     modelContextLength: number,
@@ -65,19 +72,46 @@ export class ContextCompressor {
   }
 
   /**
+   * 有效上下文窗口大小（扣除预留输出 token）
+   */
+  getEffectiveContextWindowSize(): number {
+    return getEffectiveContextWindowSize(this.modelContextLength);
+  }
+
+  /**
    * 检查是否需要压缩
    */
   shouldCompact(history: Message[]): boolean {
-    // 估算当前 token 使用量
+    // 断路器：连续失败太多次则停止
+    if (this.consecutiveFailures >= ContextCompressor.MAX_CONSECUTIVE_FAILURES) {
+      return false;
+    }
+
     const estimatedTokens = this.estimateTokens(history);
-    const usage = (estimatedTokens / this.modelContextLength) * 100;
-    return usage >= this.config.threshold;
+    const autoCompactThreshold = getAutoCompactThreshold(
+      this.modelContextLength,
+      this.config.threshold,
+    );
+    return estimatedTokens >= autoCompactThreshold;
   }
 
   /**
    * 执行压缩
    */
   async compact(history: Message[], systemPrompt: string): Promise<CompactionResult> {
+    try {
+      const result = await this._doCompact(history, systemPrompt);
+      // 成功：重置断路器
+      this.consecutiveFailures = 0;
+      return result;
+    } catch (error) {
+      // 失败：递增断路器
+      this.consecutiveFailures++;
+      throw error;
+    }
+  }
+
+  private async _doCompact(history: Message[], systemPrompt: string): Promise<CompactionResult> {
     const preserveCount = this.config.preserveLastN;
 
     // 如果历史太短，不需要压缩
@@ -222,5 +256,73 @@ export class ContextCompressor {
     }
 
     return Math.ceil(totalChars / 3);
+  }
+
+  // ─── Micro Compact：就地清理旧工具结果 ───
+
+  /** 可被清理的工具名集合 */
+  private static readonly CLEARABLE_TOOLS = new Set([
+    'read_file', 'Read', 'FileReadTool',
+    'Bash', 'bash', 'BashTool',
+    'Grep', 'grep', 'GrepTool',
+    'Glob', 'glob', 'GlobTool',
+    'web_search', 'WebSearch', 'WebSearchTool',
+    'web_fetch', 'WebFetch', 'WebFetchTool',
+    'mcp__', // MCP 工具前缀
+  ]);
+
+  /** 检查工具名是否可被 microCompact 清理 */
+  private isClearableTool(name: string): boolean {
+    if (ContextCompressor.CLEARABLE_TOOLS.has(name)) return true;
+    // MCP 工具以 mcp__ 开头
+    if (name.startsWith('mcp__')) return true;
+    return false;
+  }
+
+  /**
+   * Micro Compact — 就地清理旧的工具结果
+   *
+   * 不调用 LLM，直接将较早的 tool_result 内容替换为简短占位符。
+   * 只清理已知安全的工具（read、bash、grep、glob、web 等），
+   * 保留最近 N 条消息不清理。
+   *
+   * @returns 新的历史（工具结果被清理），null 表示无需清理
+   */
+  microCompact(history: Message[]): Message[] | null {
+    const preserveCount = Math.max(this.config.preserveLastN, 6);
+
+    if (history.length <= preserveCount) return null;
+
+    const cutoff = history.length - preserveCount;
+    let changed = false;
+    const newHistory = history.map((msg, idx) => {
+      if (idx >= cutoff) return msg; // 保留最近消息
+      if (msg.role !== 'user') return msg;
+      if (typeof msg.content === 'string') return msg;
+
+      const newContent = msg.content.map((block) => {
+        if (block.type !== 'tool_result') return block;
+        // 检查对应的 tool_use 名称
+        const toolName = (block as any).toolName || '';
+        if (!this.isClearableTool(toolName)) return block;
+
+        const currentContent = typeof block.content === 'string'
+          ? block.content
+          : JSON.stringify(block.content ?? '');
+
+        // 只清理较长的内容（>200 字符才值得清理）
+        if (currentContent.length < 200) return block;
+
+        changed = true;
+        return {
+          ...block,
+          content: `[已清理: ${toolName} 输出 ${currentContent.length} 字符]`,
+        };
+      });
+
+      return { ...msg, content: newContent };
+    });
+
+    return changed ? newHistory : null;
   }
 }
