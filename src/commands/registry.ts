@@ -7,6 +7,7 @@ import type { Message } from '../core/types.js';
 import type { ContextCompressor } from '../core/contextCompressor.js';
 import type { TokenTracker } from '../utils/tokenTracker.js';
 import type { TaskListItem } from '../services/session/taskList.js';
+import type { FocusTarget } from '../ui/ink/types.js';
 
 /**
  * 命令上下文
@@ -30,6 +31,10 @@ export interface SlashCommandContext {
   resumeSession?: (identifier?: string) => Promise<string | void>;
   requestTaskManager?: (tasks: TaskListItem[]) => Promise<{ action: 'output' | 'stop'; taskId: string } | null>;
   showToolResult?: (toolName: string, input: Record<string, unknown>, result: string, isError: boolean) => void;
+  /** 触发 UI 面板（HelpV2/Settings/ModelPicker 等） */
+  setFocus?: (target: FocusTarget) => void;
+  /** 获取所有已注册命令（用于 HelpV2 命令列表） */
+  getAllCommands?: () => { name: string; description: string }[];
 }
 
 /**

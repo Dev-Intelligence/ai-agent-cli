@@ -6,7 +6,7 @@ import { createElement } from 'react';
 import { render } from '../ui/ink/primitives.js';
 import { Config } from '../services/config/Config.js';
 import { loadUserConfig } from '../services/config/configStore.js';
-import { runSetupWizard } from '../services/config/setup.js';
+import { runInkOnboarding } from '../ui/ink/runInkOnboarding.js';
 import { createAdapter } from '../services/ai/adapters/factory.js';
 import { getSkillLoader } from '../tools/ai/index.js';
 import { createExecuteTool } from '../tools/dispatcher.js';
@@ -14,7 +14,7 @@ import { getAllTools } from '../tools/definitions.js';
 import { createSystemPrompt, getAgentDescriptions } from '../core/prompts.js';
 import { agentLoop } from '../core/loop.js';
 import { setThemeByProvider, getTheme, PRODUCT_NAME } from '../ui/index.js';
-import { createStore, createInitialAppState, setContextTokenUsage, setTokenInfo } from '../ui/ink/store.js';
+import { createStore, createInitialAppState, setContextTokenUsage, setTokenInfo, setFocus, addCompleted } from '../ui/ink/store.js';
 import type { AppState } from '../ui/ink/store.js';
 import { InkUIController } from '../ui/ink/InkUIController.js';
 import { App } from '../ui/ink/App.js';
@@ -70,8 +70,8 @@ function parseSlashCommand(input: string): { commandName: string; args: string }
  * 构建斜杠命令列表（内置命令 + 自定义命令/技能）
  */
 function buildSlashCommands(
-  builtinCommands: { name: string; aliases?: string[] }[],
-  skills: { userFacingName(): string; aliases?: string[]; isHidden?: boolean }[]
+  builtinCommands: { name: string; description: string; aliases?: string[] }[],
+  skills: { userFacingName(): string; aliases?: string[]; isHidden?: boolean; description?: string }[]
 ): SlashCommandItem[] {
   const items: SlashCommandItem[] = [];
   const seen = new Set<string>();
@@ -81,6 +81,7 @@ function buildSlashCommands(
     seen.add(cmd.name);
     items.push({
       name: cmd.name,
+      description: cmd.description,
       aliases: cmd.aliases,
       isHidden: false,
     });
@@ -92,6 +93,7 @@ function buildSlashCommands(
     seen.add(name);
     items.push({
       name,
+      description: skill.description,
       aliases: skill.aliases,
       isHidden: skill.isHidden === true,
     });
@@ -110,8 +112,8 @@ async function main(): Promise<void> {
     let userConfig = loadUserConfig();
 
     if (!userConfig) {
-      // 首次运行，启动配置向导
-      userConfig = await runSetupWizard();
+      // 首次运行，启动 Ink 引导流程
+      userConfig = await runInkOnboarding();
 
       if (!userConfig) {
         // 用户取消配置
@@ -330,6 +332,8 @@ async function main(): Promise<void> {
       requestTaskManager: (tasks) => inkController.requestTaskManager(tasks),
       showToolResult: (toolName, input, result, isError) =>
         inkController.showToolResultFromCommand(toolName, input, result, isError),
+      setFocus: (target) => setFocus(appStore, target),
+      getAllCommands: () => registry.listCommands().map(cmd => ({ name: cmd.name, description: cmd.description })),
     };
 
     // 22. 用户输入处理回调（由 Ink UserInput 组件触发）
@@ -363,14 +367,6 @@ async function main(): Promise<void> {
         let effectiveInput = text;
         if (text.startsWith('/')) {
           const parsed = parseSlashCommand(text);
-          const cmdName = parsed?.commandName || '';
-
-          // 特殊处理 help 命令
-          if (cmdName.toLowerCase() === 'help' || cmdName.toLowerCase() === 'h') {
-            inkController.showInfo(registry.getHelp());
-            inkController.goToInput();
-            return;
-          }
 
           // 先尝试内置命令（支持参数）
           const cmdResult = await registry.execute(text.slice(1), cmdContext);
@@ -546,6 +542,15 @@ async function main(): Promise<void> {
 
     // 23. 退出处理（Ctrl+D 触发）
     const handleExit = (): void => {
+      // 推送退出统计到 UI
+      const stats = tokenTracker.getStats();
+      addCompleted(appStore, {
+        type: 'shutdown',
+        message: stats.totalTokens > 0
+          ? `${history.filter(m => m.role === 'user').length} 轮对话 · ${stats.totalTokens} tokens · $${stats.totalCost.toFixed(4)}`
+          : undefined,
+      });
+
       if (hookManager.hasHooksFor('SessionEnd')) {
         hookManager.emit('SessionEnd', { workdir: config.workdir, sessionId: getSessionId() }).catch(() => {});
       }

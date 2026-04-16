@@ -3,7 +3,7 @@
  * 提取自 cli.ts 的命令逻辑，以 SlashCommand 对象形式注册
  */
 
-import type { SlashCommand } from './registry.js';
+import type { SlashCommand, SlashCommandContext } from './registry.js';
 import { getConfigSummary } from '../services/config/configStore.js';
 import { runReconfigureWizard } from '../services/config/setup.js';
 import { countTokensFromUsage, formatTokenCount, getTokenPercentage } from '../utils/tokenCounter.js';
@@ -65,14 +65,23 @@ function findFirstTextBlock(content: Message['content']): string | null {
 }
 
 /**
- * /help 命令
+ * /help 命令 — 优先触发 HelpV2 UI 面板，回退纯文本
  */
 export const helpCommand: SlashCommand = {
   name: 'help',
   aliases: ['h'],
   description: '显示帮助信息',
-  async execute(_args, _context) {
-    // 返回 undefined，由 registry.getHelp() 生成帮助内容
+  async execute(_args, context) {
+    if (context.setFocus && context.getAllCommands) {
+      const commands = context.getAllCommands();
+      return new Promise<string | void>((resolve) => {
+        context.setFocus!({
+          type: 'help_panel',
+          commands,
+          resolve: () => resolve(undefined),
+        });
+      });
+    }
     return undefined;
   },
 };
@@ -92,24 +101,62 @@ export const clearCommand: SlashCommand = {
 };
 
 /**
- * /config 命令
+ * /config 命令 — 优先触发 Settings UI 面板，回退纯文本
  */
 export const configCommand: SlashCommand = {
   name: 'config',
   description: '查看当前配置',
   async execute(_args, context) {
+    if (context.setFocus) {
+      const stats = context.tokenTracker?.getStats();
+      return new Promise<string | void>((resolve) => {
+        context.setFocus!({
+          type: 'settings_panel',
+          config: {
+            provider: context.config.provider,
+            model: context.config.model,
+            apiKeySet: Boolean(context.config.apiKey),
+            workdir: context.workdir,
+          },
+          usage: stats ? {
+            totalTokens: stats.totalTokens,
+            totalCost: stats.totalCost,
+            sessionDuration: (Date.now() - (stats as any).startTime) / 1000 || 0,
+            turns: context.history.filter(m => m.role === 'user').length,
+          } : undefined,
+          resolve: () => resolve(undefined),
+        });
+      });
+    }
     const userConfig = getEffectiveUserConfig(context);
     return '\n当前配置:\n' + getConfigSummary(userConfig) + '\n';
   },
 };
 
 /**
- * /config set 命令
+ * /config set 命令 — 优先触发 ConfigSetDialog UI，回退到 enquirer 向导
  */
 export const configSetCommand: SlashCommand = {
   name: 'config set',
   description: '重新配置',
-  async execute(_args, _context) {
+  async execute(_args, context) {
+    if (context.setFocus) {
+      return new Promise<string | void>((resolve) => {
+        context.setFocus!({
+          type: 'config_set',
+          currentProvider: context.config.provider,
+          currentModel: context.config.model,
+          resolve: (result) => {
+            if (result) {
+              resolve('配置已更新，请重新启动 CLI 以使用新配置。');
+            } else {
+              resolve(undefined);
+            }
+          },
+        });
+      });
+    }
+    // 回退：无 setFocus 时使用原 enquirer 向导
     const newConfig = await runReconfigureWizard();
     if (newConfig) {
       return '配置已更新，请重新启动 CLI 以使用新配置。';
@@ -228,12 +275,28 @@ export const costCommand: SlashCommand = {
 };
 
 /**
- * /model 命令 - 显示/切换模型
+ * /model 命令 — 优先触发 ModelPicker UI，回退纯文本
  */
 export const modelCommand: SlashCommand = {
   name: 'model',
-  description: '查看当前模型',
+  description: '查看或切换模型',
   async execute(_args, context) {
+    if (context.setFocus) {
+      return new Promise<string | void>((resolve) => {
+        context.setFocus!({
+          type: 'model_picker',
+          currentModel: context.config.model,
+          provider: context.config.provider,
+          resolve: (model) => {
+            if (model) {
+              resolve(`模型已切换为: ${model}\n注意: 需要重启 CLI 生效。`);
+            } else {
+              resolve(undefined);
+            }
+          },
+        });
+      });
+    }
     const modelDisplay = getModelDisplayName(context.config.model);
     return `当前模型: ${modelDisplay} (${context.config.provider})`;
   },
@@ -328,13 +391,32 @@ export const copyCommand: SlashCommand = {
 };
 
 /**
- * /export 命令 - 导出对话到文件
+ * /export 命令 — 优先触发 ExportDialog UI，回退纯文本导出
  */
 export const exportCommand: SlashCommand = {
   name: 'export',
   description: '导出对话到文件 (md/json/txt)',
   async execute(args, context) {
+    // 有 UI 时触发 ExportDialog
+    if (context.setFocus && !args) {
+      return new Promise<string | void>((resolve) => {
+        context.setFocus!({
+          type: 'export_dialog',
+          resolve: (format) => {
+            if (!format) { resolve(undefined); return; }
+            doExport(format, context).then(resolve);
+          },
+        });
+      });
+    }
+    // 直接带参数 or 回退
     const format = (args || 'md').toLowerCase();
+    return doExport(format, context);
+  },
+};
+
+/** 导出对话到文件的实际逻辑 */
+async function doExport(format: string, context: SlashCommandContext): Promise<string> {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
     const filename = `conversation-${timestamp}.${format}`;
     const filepath = join(context.workdir, filename);
@@ -359,7 +441,6 @@ export const exportCommand: SlashCommand = {
         content += `[${role}]\n${text}\n\n`;
       }
     } else {
-      // Markdown 格式
       content = `# 对话记录\n\n导出时间: ${new Date().toLocaleString('zh-CN')}\n\n---\n\n`;
       for (const msg of context.history) {
         const role = msg.role === 'user' ? '**用户**' : '**AI**';
@@ -380,8 +461,7 @@ export const exportCommand: SlashCommand = {
       const errorMsg = error instanceof Error ? error.message : String(error);
       return `导出失败: ${errorMsg}`;
     }
-  },
-};
+}
 
 /**
  * /status 命令 - 显示系统状态
@@ -542,12 +622,27 @@ export const debugCommand: SlashCommand = {
 };
 
 /**
- * /theme 命令 - 切换主题
+ * /theme 命令 — 优先触发 ThemePicker UI，回退纯文本
  */
 export const themeCommand: SlashCommand = {
   name: 'theme',
   description: '查看或切换主题',
   async execute(args, context) {
+    if (!args && context.setFocus) {
+      return new Promise<string | void>((resolve) => {
+        context.setFocus!({
+          type: 'theme_picker',
+          resolve: (theme) => {
+            if (theme && setTheme(theme)) {
+              setThemeByProvider(context.config.provider);
+              resolve(`主题已切换为: ${theme}`);
+            } else {
+              resolve(undefined);
+            }
+          },
+        });
+      });
+    }
     if (!args) {
       const current = getThemeName();
       const available = getAvailableThemes();
@@ -664,6 +759,17 @@ const doctorCommand: SlashCommand = {
   name: 'doctor',
   description: '运行诊断检查',
   execute: async (_args, context) => {
+    // 有 UI 时触发 DiagnosticsDisplay
+    if (context.setFocus) {
+      const checks = buildDiagnosticChecks(context);
+      return new Promise<string | void>((resolve) => {
+        context.setFocus!({
+          type: 'diagnostics',
+          checks,
+          resolve: () => resolve(undefined),
+        });
+      });
+    }
     const lines: string[] = ['诊断检查:', ''];
 
     // Node.js 版本
@@ -854,6 +960,128 @@ const vimCommand: SlashCommand = {
   },
 };
 
+// ─── 辅助函数：构建诊断检查项 ───
+
+type DiagnosticCheck = { name: string; status: 'pass' | 'warn' | 'fail' | 'skip'; message?: string; detail?: string };
+
+function buildDiagnosticChecks(context: SlashCommandContext): DiagnosticCheck[] {
+  const checks: DiagnosticCheck[] = [];
+  checks.push({ name: 'Node.js', status: 'pass', message: process.version });
+  checks.push({ name: '平台', status: 'pass', message: `${process.platform} ${process.arch}` });
+  checks.push({ name: 'Provider', status: 'pass', message: context.config.provider });
+  checks.push({ name: 'Model', status: 'pass', message: getModelDisplayName(context.config.model) });
+  checks.push({
+    name: 'API Key',
+    status: context.config.apiKey ? 'pass' : 'fail',
+    message: context.config.apiKey ? '已配置' : '未配置',
+  });
+  if (context.config.baseUrl) {
+    checks.push({ name: 'Base URL', status: 'pass', message: context.config.baseUrl });
+  }
+  const contextLength = getModelContextLength(context.config.provider, context.config.model);
+  checks.push({ name: '上下文窗口', status: 'pass', message: `${(contextLength / 1000).toFixed(0)}k tokens` });
+  checks.push({ name: '工作目录', status: 'pass', message: context.workdir });
+  const mem = process.memoryUsage();
+  checks.push({ name: '内存使用', status: mem.heapUsed > 500 * 1024 * 1024 ? 'warn' : 'pass', message: `${(mem.heapUsed / 1024 / 1024).toFixed(1)} MB` });
+  return checks;
+}
+
+// ─── /stats 命令 ───
+
+const statsCommand: SlashCommand = {
+  name: 'stats',
+  description: '显示会话统计',
+  execute: async (_args, context) => {
+    if (context.setFocus && context.tokenTracker) {
+      const s = context.tokenTracker.getStats();
+      return new Promise<string | void>((resolve) => {
+        context.setFocus!({
+          type: 'stats_panel',
+          data: {
+            totalTokens: s.totalTokens,
+            totalCost: s.totalCost,
+            turns: context.history.filter(m => m.role === 'user').length,
+            toolCalls: context.history.filter(m => m.role === 'assistant' && Array.isArray(m.content) && m.content.some((b: any) => b.type === 'tool_use')).length,
+            durationSeconds: 0,
+            model: context.config.model,
+            provider: context.config.provider,
+          },
+          resolve: () => resolve(undefined),
+        });
+      });
+    }
+    // 回退到 /cost
+    return costCommand.execute(_args, context);
+  },
+};
+
+// ─── /output-style 命令 ───
+
+const outputStyleCommand: SlashCommand = {
+  name: 'output-style',
+  description: '选择输出风格',
+  execute: async (_args, context) => {
+    if (context.setFocus) {
+      return new Promise<string | void>((resolve) => {
+        context.setFocus!({
+          type: 'output_style_picker',
+          currentStyle: 'normal',
+          resolve: (style) => {
+            if (style) resolve(`输出风格已切换为: ${style}`);
+            else resolve(undefined);
+          },
+        });
+      });
+    }
+    return '可用风格: concise / normal / explanatory / learning';
+  },
+};
+
+// ─── /language 命令 ───
+
+const languageCommand: SlashCommand = {
+  name: 'language',
+  aliases: ['lang'],
+  description: '选择回复语言',
+  execute: async (_args, context) => {
+    if (context.setFocus) {
+      return new Promise<string | void>((resolve) => {
+        context.setFocus!({
+          type: 'language_picker',
+          currentLanguage: 'zh',
+          resolve: (lang) => {
+            if (lang) resolve(`语言已切换为: ${lang}`);
+            else resolve(undefined);
+          },
+        });
+      });
+    }
+    return '可用语言: zh / en / ja / ko / es / fr / de';
+  },
+};
+
+// ─── /log-level 命令 ───
+
+const logLevelCommand: SlashCommand = {
+  name: 'log-level',
+  description: '设置日志级别',
+  execute: async (_args, context) => {
+    if (context.setFocus) {
+      return new Promise<string | void>((resolve) => {
+        context.setFocus!({
+          type: 'log_selector',
+          currentLevel: 'info',
+          resolve: (level) => {
+            if (level) resolve(`日志级别已设置为: ${level}`);
+            else resolve(undefined);
+          },
+        });
+      });
+    }
+    return '可用级别: debug / info / warn / error / silent';
+  },
+};
+
 /**
  * 获取所有内置命令
  */
@@ -885,5 +1113,9 @@ export function getBuiltinCommands(): SlashCommand[] {
     modelSetCommand,
     mcpCommand,
     vimCommand,
+    statsCommand,
+    outputStyleCommand,
+    languageCommand,
+    logLevelCommand,
   ];
 }
