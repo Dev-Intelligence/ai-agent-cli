@@ -25,6 +25,7 @@ import { normalizeToolExecutionResult, toolResultContentToText } from './toolRes
 import { generateUuid } from '../utils/uuid.js';
 import { appendSessionJsonlFromMessage } from '../services/session/sessionLog.js';
 import { getSessionId } from '../services/session/sessionId.js';
+import { createDefaultStopChain } from './query/stopHooks.js';
 
 /**
  * Generator 版代理循环配置
@@ -605,7 +606,19 @@ export async function* agentLoopGenerator(
   }
 
   if (turns >= maxTurns && !silent) {
-    yield { type: 'warning', message: `达到最大轮次限制 (${maxTurns})` };
+    // 使用 P1-2 引入的 StopChain 生成统一的终止消息；
+    // 其余停止路径（aborted / interrupted / final_response）后续 P1-3 深度重构时再迁入。
+    const chain = createDefaultStopChain();
+    const decision = chain.evaluate({
+      turn: turns,
+      maxTurns,
+      toolCallCount: 1, // 占位：此处仅关心 max_turns 分支
+      adapterStopReason: 'tool_use',
+    });
+    yield {
+      type: 'warning',
+      message: decision.message ?? `达到最大轮次限制 (${maxTurns})`,
+    };
   }
 
   // 完成事件
