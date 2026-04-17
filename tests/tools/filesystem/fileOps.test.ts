@@ -1,0 +1,100 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { runRead, runWrite, runEdit } from '../../../src/tools/filesystem/fileOps.js';
+
+let workdir = '';
+
+function setup(): void {
+  workdir = fs.mkdtempSync(path.join(os.tmpdir(), 'aac-fs-'));
+  // fileHistory 写入 $HOME/.ai-agent/fileHistory/，隔离到 workdir 下
+  process.env.HOME = workdir;
+}
+
+function teardown(): void {
+  if (workdir && fs.existsSync(workdir)) {
+    fs.rmSync(workdir, { recursive: true, force: true });
+  }
+  workdir = '';
+}
+
+describe('runWrite', () => {
+  beforeEach(setup);
+  afterEach(teardown);
+
+  it('创建新文件', async () => {
+    const fp = path.join(workdir, 'hello.txt');
+    const r = await runWrite(workdir, fp, 'hello world');
+    expect(r).toBeTruthy();
+    expect(fs.readFileSync(fp, 'utf-8')).toBe('hello world');
+  });
+
+  it('非绝对路径返回错误', async () => {
+    const r = await runWrite(workdir, 'rel.txt', 'x');
+    const content = typeof r === 'string' ? r : JSON.stringify(r);
+    expect(content).toContain('绝对路径');
+  });
+});
+
+describe('runRead', () => {
+  beforeEach(setup);
+  afterEach(teardown);
+
+  it('读取已存在文件', async () => {
+    const fp = path.join(workdir, 'a.txt');
+    fs.writeFileSync(fp, 'line1\nline2\n');
+    const r = await runRead(workdir, fp);
+    const content = typeof r === 'string' ? r : String((r as { content: unknown }).content);
+    expect(content).toContain('line1');
+    expect(content).toContain('line2');
+  });
+
+  it('不存在文件返回错误', async () => {
+    const fp = path.join(workdir, 'nope.txt');
+    const r = await runRead(workdir, fp);
+    const content = typeof r === 'string' ? r : String((r as { content: unknown }).content);
+    expect(content).toContain('不存在');
+  });
+
+  it('目录路径返回错误', async () => {
+    const r = await runRead(workdir, workdir);
+    const content = typeof r === 'string' ? r : String((r as { content: unknown }).content);
+    expect(content).toContain('目录');
+  });
+});
+
+describe('runEdit', () => {
+  beforeEach(setup);
+  afterEach(teardown);
+
+  it('精确替换', async () => {
+    const fp = path.join(workdir, 'e.txt');
+    fs.writeFileSync(fp, 'foo bar baz');
+    await runEdit(workdir, fp, 'bar', 'BAR');
+    expect(fs.readFileSync(fp, 'utf-8')).toBe('foo BAR baz');
+  });
+
+  it('old == new 返回错误', async () => {
+    const fp = path.join(workdir, 'e.txt');
+    fs.writeFileSync(fp, 'foo');
+    const r = await runEdit(workdir, fp, 'foo', 'foo');
+    const content = typeof r === 'string' ? r : String((r as { content: unknown }).content);
+    expect(content).toContain('不同');
+  });
+
+  it('多重匹配 + 未传 replaceAll 返回错误', async () => {
+    const fp = path.join(workdir, 'e.txt');
+    fs.writeFileSync(fp, 'x x x');
+    const r = await runEdit(workdir, fp, 'x', 'y');
+    const content = typeof r === 'string' ? r : String((r as { content: unknown }).content);
+    expect(content).toContain('3 次');
+  });
+
+  it('replaceAll=true 替换全部', async () => {
+    const fp = path.join(workdir, 'e.txt');
+    fs.writeFileSync(fp, 'x x x');
+    await runEdit(workdir, fp, 'x', 'y', true);
+    expect(fs.readFileSync(fp, 'utf-8')).toBe('y y y');
+  });
+});
