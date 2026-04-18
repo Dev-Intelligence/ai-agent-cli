@@ -31,6 +31,7 @@ import { runListMcpResources, runReadMcpResource } from './mcp/mcpTools.js';
 import type { HierarchicalAbortController } from '../core/abort.js';
 import { loadPromptWithVars } from '../services/promptLoader.js';
 import type { TodoItem } from './types.js';
+import { errorMessage } from '../utils/errors.js';
 
 /**
  * 工具执行器配置
@@ -308,10 +309,7 @@ export function createExecuteTool(config: ToolExecutorConfig): ExecuteToolFunc {
       }
       return normalizeToolExecutionResult(result);
     } catch (error: unknown) {
-      if (error instanceof Error) {
-        return normalizeToolExecutionResult(`工具执行错误: ${error.message}`);
-      }
-      return normalizeToolExecutionResult(`工具执行错误: ${String(error)}`);
+      return normalizeToolExecutionResult(`工具执行错误: ${errorMessage(error)}`);
     }
   };
 }

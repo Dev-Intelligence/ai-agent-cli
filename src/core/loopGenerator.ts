@@ -26,6 +26,7 @@ import { generateUuid } from '../utils/uuid.js';
 import { appendSessionJsonlFromMessage } from '../services/session/sessionLog.js';
 import { getSessionId } from '../services/session/sessionId.js';
 import { createDefaultStopChain } from './query/stopHooks.js';
+import { errorMessage, toError } from '../utils/errors.js';
 
 /**
  * Generator 版代理循环配置
@@ -185,7 +186,7 @@ export async function* agentLoopGenerator(
           streamResolve!(result);
         },
         (error) => {
-          streamReject!(error instanceof Error ? error : new Error(String(error)));
+          streamReject!(toError(error));
         }
       );
 
@@ -541,7 +542,7 @@ export async function* agentLoopGenerator(
             name: toolCall.name,
           };
         } catch (error: unknown) {
-          const errorMsg = error instanceof Error ? error.message : String(error);
+          const errorMsg = errorMessage(error);
 
           // PostToolUseFailure Hook
           if (hookManager?.hasHooksFor('PostToolUseFailure')) {
@@ -616,7 +617,7 @@ export async function* agentLoopGenerator(
         break;
       }
 
-      const errorMsg = error instanceof Error ? error.message : String(error);
+      const errorMsg = errorMessage(error);
       if (!silent) {
         yield { type: 'error', message: `API 调用失败: ${errorMsg}` };
       }
