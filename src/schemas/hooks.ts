@@ -186,3 +186,27 @@ export type AgentHook = Extract<HookCommand, { type: 'agent' }>;
 export type HttpHook = Extract<HookCommand, { type: 'http' }>;
 export type HookMatcher = z.infer<typeof HookMatcherSchema>;
 export type HooksSettings = Partial<Record<HookEvent, HookMatcher[]>>;
+
+// ─── 本项目当前使用的扁平 Hook 定义 schema ─────────────────────────
+// 与 src/core/hooks.ts 的 HookDefinition 对齐：
+//   { event, command, timeout?, blocking?, toolFilter? }
+// 用 zod 校验给出更清晰的错误（event 枚举、toolFilter 类型等）。
+
+export const FlatHookDefinitionSchema = z.object({
+  event: z.enum(HOOK_EVENTS).describe('触发事件'),
+  command: z.string().min(1).describe('要执行的 shell 命令'),
+  timeout: z.number().positive().optional().describe('超时（ms），默认 10000'),
+  blocking: z.boolean().optional().describe('是否阻塞执行，默认 true'),
+  toolFilter: z
+    .array(z.string())
+    .optional()
+    .describe('工具名称过滤（仅对 *ToolUse 事件有效）'),
+});
+
+/** hooks.json 顶层：支持 `{ hooks: [...] }` 或直接是数组 */
+export const FlatHookConfigFileSchema = z.union([
+  z.object({ hooks: z.array(FlatHookDefinitionSchema) }),
+  z.array(FlatHookDefinitionSchema),
+]);
+
+export type FlatHookDefinition = z.infer<typeof FlatHookDefinitionSchema>;
