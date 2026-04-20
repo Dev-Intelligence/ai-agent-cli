@@ -97,4 +97,17 @@ describe('runEdit', () => {
     await runEdit(workdir, fp, 'x', 'y', true);
     expect(fs.readFileSync(fp, 'utf-8')).toBe('y y y');
   });
+
+  it('成功后 uiContent 含 diff 摘要与行内容', async () => {
+    const fp = path.join(workdir, 'm.txt');
+    fs.writeFileSync(fp, 'line 1\nold line\nline 3\n');
+    const r = await runEdit(workdir, fp, 'old line', 'new line');
+    const obj = r as { uiContent?: string };
+    expect(obj.uiContent).toBeDefined();
+    expect(obj.uiContent!).toMatch(/Edited .*\(\d+ hunk/);
+    expect(obj.uiContent!).toContain('─── ');
+    expect(obj.uiContent!).toContain('+++ ');
+    expect(obj.uiContent!).toContain('old line');
+    expect(obj.uiContent!).toContain('new line');
+  });
 });

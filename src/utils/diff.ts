@@ -102,3 +102,62 @@ export function formatPatchAsText(
   }
   return lines.join('\n');
 }
+
+/**
+ * 将 patch hunks 渲染为终端友好的带行号 diff，用于 Edit/Write 工具的
+ * uiContent 展示。每行格式：
+ *   - 上下文行：`       NNN | content`
+ *   - 删除行：  `  ─── NNN | content`
+ *   - 新增行：  `  +++ NNN | content`
+ * 多 hunk 之间用 `  ⋯` 隔开。
+ */
+export function renderHunksForUI(hunks: StructuredPatchHunk[]): string {
+  if (hunks.length === 0) return '';
+  const outLines: string[] = [];
+  // 行号宽度按所有 hunk 里出现的最大行号算
+  const maxLine = hunks.reduce((m, h) => {
+    return Math.max(
+      m,
+      h.oldStart + h.oldLines,
+      h.newStart + h.newLines,
+    );
+  }, 0);
+  const width = String(maxLine).length;
+
+  for (let hi = 0; hi < hunks.length; hi++) {
+    const h = hunks[hi]!;
+    if (hi > 0) outLines.push('  ⋯');
+    let oldN = h.oldStart;
+    let newN = h.newStart;
+    for (const raw of h.lines) {
+      const marker = raw[0] ?? ' ';
+      const text = raw.slice(1);
+      if (marker === '\\') continue; // "\ No newline at end of file"
+      const pad = (n: number): string => String(n).padStart(width);
+      if (marker === '-') {
+        outLines.push(`  ─── ${pad(oldN)} | ${text}`);
+        oldN++;
+      } else if (marker === '+') {
+        outLines.push(`  +++ ${pad(newN)} | ${text}`);
+        newN++;
+      } else {
+        outLines.push(`       ${pad(newN)} | ${text}`);
+        oldN++;
+        newN++;
+      }
+    }
+  }
+  return outLines.join('\n');
+}
+
+/**
+ * 简短摘要：`1 hunk, +3, -2` 或 `2 hunks, +5`。
+ */
+export function summarizeHunks(hunks: StructuredPatchHunk[]): string {
+  const { additions, removals } = countPatchChanges(hunks);
+  const hunkWord = hunks.length === 1 ? 'hunk' : 'hunks';
+  const parts: string[] = [`${hunks.length} ${hunkWord}`];
+  if (additions > 0) parts.push(`+${additions}`);
+  if (removals > 0) parts.push(`-${removals}`);
+  return parts.join(', ');
+}

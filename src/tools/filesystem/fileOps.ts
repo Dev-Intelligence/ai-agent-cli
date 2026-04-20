@@ -5,6 +5,7 @@
 import fs from 'fs-extra';
 import path from 'node:path';
 import type { ToolExecutionResult, ToolResultContentBlock } from '../../core/types.js';
+import { getPatchFromContents, renderHunksForUI, summarizeHunks } from '../../utils/diff.js';
 
 const MAX_OUTPUT_SIZE = 0.25 * 1024 * 1024; // 0.25MB
 const MAX_LINE_LENGTH = 2000;
@@ -425,9 +426,13 @@ function buildEditResult(
   replaceAll: boolean,
   updatedFile: string
 ): FileEditResult {
-  const oldLines = splitLines(originalFile);
-  const newLines = splitLines(updatedFile);
-  const structuredPatch = buildStructuredPatch(oldLines, newLines);
+  // 走 diff npm 包的 structuredPatch（和 renderHunksForUI 保持一致）
+  // 替代原本地实现 buildStructuredPatch，其对修改行的定位有 bug
+  const structuredPatch = getPatchFromContents({
+    filePath,
+    oldContent: originalFile,
+    newContent: updatedFile,
+  });
   const gitDiff = buildGitDiff(filePath, 'modified', structuredPatch, false);
 
   const result: FileEditResult = {
@@ -749,9 +754,14 @@ export async function runEdit(
       updated
     );
 
+    const diffBlock = renderHunksForUI(result.structuredPatch);
+    const summary = summarizeHunks(result.structuredPatch);
+    const header = `Edited ${filePath}${summary ? `  (${summary})` : ''}`;
+    const uiContent = diffBlock ? `${header}\n\n${diffBlock}` : header;
+
     return {
       content: JSON.stringify(result),
-      uiContent: `Edited ${filePath}`,
+      uiContent,
       rawOutput: result,
     };
   } catch (error: unknown) {
